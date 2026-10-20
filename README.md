@@ -77,6 +77,16 @@ the server uses; the installer refuses a port that's taken. Next.js can't read `
 `npm start` goes through `scripts/start.mjs`. After editing `.env`, `pm2 restart <service>` (re-run the
 installer if you change `PORT` or `DOMAIN`, so nginx follows).
 
+**Nightly updates.** `deploy/update.sh` needs no sudo, so it can run from the app user's crontab. It fast-forwards
+to `origin`, runs `npm ci` only if dependencies changed, then migrates, builds, reloads PM2 and health-checks. If any
+step fails it rolls back to the previous commit. It does nothing when there's nothing new, and refuses to run if
+the server's checkout has local edits. nginx/installer changes still need `bash deploy/install.sh` by hand.
+
+```bash
+crontab -e   # as the app user; server clocks are usually UTC — 08:30 UTC ≈ 3:30 AM Central
+30 8 * * * /var/www/nsaa/deploy/update.sh >> "$HOME/nsaa-update.log" 2>&1
+```
+
 **nginx** rate-limits `/api/chat` (6/min per IP, burst 5 — it spends Anthropic credits), other `/api/*` (30/min),
 disables buffering for the chat stream, and blocks `/api/refresh` publicly (the timer calls the app directly).
 
