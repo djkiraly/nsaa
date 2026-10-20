@@ -68,6 +68,14 @@ export interface SeededTeam extends TeamRecord {
   seed: number;
 }
 
+/** A result NSAA has posted. Sets are the winner's and the loser's. */
+export interface MatchResult {
+  winner: string;
+  loser: string;
+  setsW: number;
+  setsL: number;
+}
+
 /** A single bracket match slot. */
 export interface BracketMatch {
   id: string;
@@ -81,6 +89,48 @@ export interface BracketMatch {
   site?: string;
   date?: string;
   winner?: string;
+  /** From NSAA's official bracket page, once posted. */
+  time?: string;
+  /** Venue NSAA lists for the match ("Waverly"); decides home court over the rule-based host. */
+  officialSite?: string;
+  result?: MatchResult;
+}
+
+/** One game on an NSAA bracket page (names already matched to the schedule export). */
+export interface OfficialGame {
+  num: number;
+  date?: string;
+  time?: string;
+  site?: string;
+  /** Top and bottom slots; `seeded` marks a team's first appearance ("#2 Northwest …") vs. an advancing winner. */
+  slots: ({ name: string; seeded: boolean } | null)[];
+  winner?: string;
+  /** Winner's sets – loser's sets */
+  score?: [number, number];
+}
+
+/** An official district / sub-district from NSAA's bracket page. */
+export interface OfficialGroup {
+  id: string;
+  defaultSite?: string;
+  seeds: { name: string; seed: number }[];
+  games: OfficialGame[];
+}
+
+/** One C1/C2/D1/D2 district final from NSAA's district finals page. */
+export interface OfficialDistrictFinal {
+  id: string;
+  date?: string;
+  time?: string;
+  host?: string;
+  teams?: { name: string; seed: number }[];
+  winner?: string;
+  score?: [number, number];
+}
+
+export interface OfficialClass {
+  groups: Record<string, OfficialGroup>;
+  districtFinals: Record<string, OfficialDistrictFinal>;
 }
 
 export interface Bracket {

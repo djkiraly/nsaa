@@ -5,13 +5,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "../data/season";
 import { NSAA_URLS } from "../data/load";
-import { parseBracketPage, parseDistrictFinals } from "../data/parse-html";
+import { parseBracketPage, parseDistrictFinals } from "../data/parse-brackets";
 import { matchWinProb, setWinProb } from "../engine/ratings";
 import { distanceMiles } from "../engine/geo";
 import { hasDistrictFinals } from "../engine/brackets";
 import { DIST_IDS } from "../engine/seeding";
 import { computeRecord } from "../engine/wildcard";
-import type { VbClass } from "../engine/types";
+import type { BracketMatch, VbClass } from "../engine/types";
 import type { Stage, TeamSimStats } from "../engine/simulate";
 import { RULES_SUMMARY } from "./rules";
 
@@ -33,7 +33,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: "get_projected_brackets",
     description:
-      "Projected district (A/B) or sub-district (C1/C2/D1/D2) groupings and bracket pairings with hosts/sites and dates, computed from current wildcard averages using the NSAA rules (A/B serpentine, C regions + serpentine, D NSAA-assigned sub-districts). Optionally filter to one group id like 'A-3', 'B-6', 'C2-7' or 'D1-12'.",
+      "District (A/B) or sub-district (C1/C2/D1/D2) groupings and bracket pairings with sites, dates and results. Official (NSAA's posted pairings, times, venues and results) once NSAA posts them on Oct 22; before that projected from wildcard averages using the NSAA rules — `status` says which. Includes the C/D district finals once NSAA posts them. Optionally filter to one group id like 'A-3', 'B-6', 'C2-7' or 'D1-12'.",
     input_schema: {
       type: "object",
       properties: { vbClass: classParam, groupId: { type: "string", description: "e.g. A-3, B-6, C2-7, D1-12" } },
@@ -170,20 +170,27 @@ export async function runTool(name: string, input: Json): Promise<Json> {
       const proj = await getProjection(vbClass);
       const want = (input.groupId as string | undefined)?.toUpperCase();
       const brackets = proj.brackets.filter((b) => !want || b.id === want);
+      const match = (m: BracketMatch) => ({
+        label: m.label,
+        date: m.date,
+        time: m.time,
+        top: m.top,
+        bottom: m.bottom,
+        site: m.officialSite ?? m.host ?? (m.site ? `neutral: ${m.site}` : "highest remaining seed"),
+        result: m.result ? `${m.result.winner} def. ${m.result.loser} ${m.result.setsW}-${m.result.setsL}` : undefined,
+      });
       return {
         vbClass,
+        status: proj.official
+          ? "OFFICIAL — NSAA's posted groups, seeds, sites and times; results shown are final."
+          : `PROJECTED from wildcard averages — NSAA posts official pairings Thu Oct 22.`,
         note: BRACKET_NOTES[vbClass],
         brackets: brackets.map((b) => ({
           id: b.id,
           teams: b.teams.map((t) => ({ seed: t.seed, team: t.name, record: `${t.wins}-${t.losses}`, avg: Number(t.avg.toFixed(4)) })),
-          matches: b.matches.map((m) => ({
-            label: m.label,
-            date: m.date,
-            top: m.top,
-            bottom: m.bottom,
-            host: m.host ?? (m.site ? `neutral: ${m.site}` : "highest remaining seed"),
-          })),
+          matches: b.matches.map(match),
         })),
+        ...(proj.districtFinals && !want ? { districtFinals: proj.districtFinals.matches.map(match) } : {}),
       };
     }
     case "simulate_postseason": {
@@ -288,8 +295,25 @@ export async function runTool(name: string, input: Json): Promise<Json> {
       if (!distId) return { error: `Unknown group id ${input.groupId}` };
       const url = NSAA_URLS.bracket(distId);
       const html = await (await fetch(url, { cache: "no-store" })).text();
-      const parsed = parseBracketPage(html);
-      return { url, available: parsed.available, title: parsed.title, results: parsed.results, text: parsed.text.slice(0, 4000) };
+      const p = parseBracketPage(html);
+      return {
+        url,
+        available: p.available,
+        title: p.title,
+        defaultSite: p.defaultSite,
+        seeds: p.seeds,
+        games: p.games.map((g) => ({
+          game: g.num,
+          date: g.date,
+          time: g.time,
+          site: g.site ?? p.defaultSite,
+          top: g.top?.name,
+          bottom: g.bottom?.name,
+          winner: g.winner,
+          score: g.score?.join("-"),
+        })),
+        champion: p.champion?.name,
+      };
     }
     case "fetch_district_finals": {
       const html = await (await fetch(NSAA_URLS.districtFinals, { cache: "no-store" })).text();

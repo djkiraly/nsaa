@@ -17,7 +17,10 @@ export default async function Home() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">2026 Nebraska volleyball postseason</h1>
         <p className="text-sm text-muted mt-1">
-          Seeding is based on matches through {SEEDING_CUTOFF}. Official pairings post Thursday Oct 22 on nsaahome.org.
+          Seeding is based on matches through {SEEDING_CUTOFF}.{" "}
+          {sims.some((s) => s.projection.official)
+            ? "Official NSAA pairings and results load as they're posted; a class still marked projected is waiting on NSAA."
+            : "Official pairings post Thursday Oct 22 on nsaahome.org."}
           Data as of {season.fetchedAt.toLocaleString("en-US", { timeZone: "America/Chicago" })} CT ({season.source}).
         </p>
       </div>
@@ -34,7 +37,10 @@ export default async function Home() {
               <CardHeader className="flex items-center justify-between">
                 <CardTitle className="text-base">
                   Class {sim.vbClass}{" "}
-                  <span className="text-muted font-normal">· {teamCount(sim.vbClass)} teams</span>
+                  <span className="text-muted font-normal">· {teamCount(sim.vbClass)} teams</span>{" "}
+                  <Badge variant={sim.projection.official ? "good" : "outline"} className="ml-1 align-middle">
+                    {sim.projection.official ? "official" : "projected"}
+                  </Badge>
                 </CardTitle>
                 <Link href={`/class/${sim.vbClass}`} className="text-sm text-accent hover:underline">
                   Standings & brackets →

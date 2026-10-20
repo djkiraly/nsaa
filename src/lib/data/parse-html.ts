@@ -3,8 +3,7 @@
  *  - Region assignments  (nsaaforms/regions/assignments.php?sport=vb&class=C2)
  *  - District / sub-district assignments (distassign.php?sport=vb — D1/D2 schools are listed before seeding)
  *  - Wildcard leaders    (wildcards/points/index.php?sport=vb&year=2026&class=B)
- *  - Bracket pages       (nsaaforms/officials/vbbrackets.php?distid=N)
- *  - District finals     (nsaaforms/officials/vbfinals.php)
+ *  (bracket pages and district finals: see parse-brackets.ts)
  */
 import * as cheerio from "cheerio";
 import type { RegionAssignment } from "../engine/seeding";
@@ -63,7 +62,11 @@ export function parseSubdistrictAssignments(html: string): Record<string, string
   return out;
 }
 
-/** Find `name` among `candidates`: exact, else ignoring case, punctuation and parenthetical suffixes. */
+/**
+ * Find `name` among `candidates`. NSAA pages disagree on spelling, so in order: exact; ignoring case, punctuation
+ * and parenthetical suffixes; same words in another order ("Omaha Concordia" / "Concordia Omaha"); the
+ * parenthetical abbreviation ("BDS" / "Bruning-Davenport-Shickley (BDS)").
+ */
 export function matchTeamName(name: string, candidates: string[]): string | undefined {
   const norm = (s: string) =>
     s
@@ -71,8 +74,17 @@ export function matchTeamName(name: string, candidates: string[]): string | unde
       .replace(/\([^)]*\)/g, "")
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
+  const words = (s: string) => norm(s).split(" ").sort().join(" ");
+  const abbrev = (s: string) => s.match(/\(([^)]+)\)\s*$/)?.[1].toLowerCase().replace(/[^a-z0-9]+/g, "");
   const n = norm(name);
-  return candidates.find((c) => c === name) ?? candidates.find((c) => norm(c) === n);
+  const w = words(name);
+  const a = name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return (
+    candidates.find((c) => c === name) ??
+    candidates.find((c) => norm(c) === n) ??
+    candidates.find((c) => words(c) === w) ??
+    candidates.find((c) => abbrev(c) === a)
+  );
 }
 
 export interface LeaderRow {
@@ -100,53 +112,6 @@ export function parseWildcardLeaders(html: string): LeaderRow[] {
     rows.push({ rank, school, sid: sidM ? Number(sidM[1]) : undefined, wins: w, losses: l, avg });
   });
   return rows;
-}
-
-export interface BracketPageMatch {
-  text: string;
-}
-
-/**
- * Bracket pages are free-form; we capture the raw text blocks so the agent can
- * read site/time info, and attempt to extract "Team def. Team" results.
- */
-export function parseBracketPage(html: string): { title: string; available: boolean; text: string; results: { winner: string; loser: string; score?: string }[] } {
-  const $ = cheerio.load(html);
-  const title = $("h1").first().text().trim();
-  const text = $("body").text().replace(/\s+\n/g, "\n").replace(/[ \t]+/g, " ").trim();
-  const available = !/Information not available/i.test(text);
-  const results: { winner: string; loser: string; score?: string }[] = [];
-  const re = /([A-Za-z.'&\/\- ()]+?)\s+(?:def\.|defeated|over)\s+([A-Za-z.'&\/\- ()]+?)(?:[,\s]+((?:\d+-\d+[,\s]*)+))?(?:\n|$)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    results.push({ winner: m[1].trim(), loser: m[2].trim(), score: m[3]?.trim() });
-  }
-  return { title, available, text, results };
-}
-
-export interface DistrictFinalInfo {
-  id: string; // "C2-3"
-  date?: string;
-  host?: string;
-  teams?: string;
-  winner?: string;
-}
-
-export function parseDistrictFinals(html: string): DistrictFinalInfo[] {
-  const $ = cheerio.load(html);
-  const text = $("body").text();
-  const out: DistrictFinalInfo[] = [];
-  const blocks = text.split(/(?=\b[A-D][12]?-\d{1,2} District Final:)/);
-  for (const b of blocks) {
-    const idM = b.match(/\b([A-D][12]?-\d{1,2}) District Final:/);
-    if (!idM) continue;
-    const date = b.match(/(\w+ \d{1,2}, \d{4})/)?.[1];
-    const host = b.match(/Host \(Site\):\s*(.+)/)?.[1]?.trim();
-    const teams = b.match(/Teams:\s*(.+)/)?.[1]?.trim();
-    const winner = b.match(/WINNER:\s*(.+)/)?.[1]?.trim();
-    out.push({ id: idM[1], date, host, teams, winner: winner || undefined });
-  }
-  return out;
 }
 
 /**

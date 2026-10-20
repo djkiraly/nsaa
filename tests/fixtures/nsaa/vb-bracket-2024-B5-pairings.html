@@ -1,0 +1,41 @@
+<div style="text-align:center"><a href="/"><img src="/wp-content/uploads/2014/08/nsaalogotransparent250.png" style="height:80;margin:5px;border:0;"></a></div><html><head><title>NSAA Home</title><link href="/css/nsaaforms.css" rel=stylesheet type="text/css"><script type="text/javascript" src="https://nsaa-static.s3.amazonaws.com/tinymce09102015/jscripts/tiny_mce/tiny_mce.js"></script>
+<script type="text/javascript">
+window.onload = function(){
+replaceurl();
+}
+function  replaceurl (){
+	var links = document.getElementsByTagName('a');
+	for(var i=0; i<links.length; i++) {
+		
+		var n = links[i].href.includes('.php');
+		var n2 = links[i].href.includes('nsaa-static.s3.amazonaws.com');
+		
+		if(n==true && n2==true)
+		{
+			var url=links[i].href;
+			if(url.includes('nsaa-static.s3.amazonaws.com')==true)
+			{
+				links[i].setAttribute('href', url.replace('nsaa-static.s3.amazonaws.com', 'secure.nsaahome.org'));
+				
+			}
+		}
+	}
+}
+</script>
+</head><body><table width=100%><tr align=center><td><h1>Volleyball Subdistrict B-5 at Norris </h1><br><table cellspacing=1 cellpadding=0><tr align=center valign=center><td><table cellspacing=0 cellpadding=0><tr align=center valign=bottom><td width=215 height=60><font style="font-size:9pt;">#4 Lincoln Northwest 38.9091 (9-25)</font></td></tr><tr align=center><td width=215 height=100 class=border bgcolor=#E0E0E0><b><font style="font-size:9pt;">Match 1<br>10/29/2024<br>5:00 PM CT</font></b></td></tr><tr align=center valign=top><td width=215 height=75><font style="font-size:9pt;">#5 Beatrice 38.4444 (10-18)</font></td></tr><tr align=center valign=bottom><td width=215 height=135>&nbsp;</td></tr></table></td><td><table cellspacing=0 cellpadding=0><tr align=center valign=bottom><td width=215 height=10><font style="font-size:9pt;">#1 Norris 46.7813 (32-1)</font></td></tr><tr align=center><td width=215 height=100 class=border bgcolor=#E0E0E0><b><font style="font-size:9pt;">Match 3<br>10/29/2024<br>6:30 PM CT</font></b></td></tr><tr align=center valign=top><td width=215 height=75></td></tr><tr align=center valign=bottom><td width=215 height=25><font style="font-size:9pt;">#3 Lincoln Standing Bear 39.2941 (11-24)</font></td></tr><tr align=center><td width=215 height=100 class=border bgcolor=#E0E0E0><b><font style="font-size:9pt;">Match 2<br>10/29/2024<br>6:30 PM CT<br>@ Lincoln Pius X</font></b></td></tr><tr align=center valign=top><td width=215 height=60><font style="font-size:9pt;">#2 Lincoln Pius X 41.8649 (14-23)</font></td></tr></table></td><td><table cellspacing=0 cellpadding=0><tr align=center valign=bottom><td width=215 height=60></td></tr><tr align=center><td width=215 height=210 class=border bgcolor=#E0E0E0><b><font style="font-size:9pt;">Match 4<br>10/30/2024<br>6:00 PM CT</font></b></td></tr><tr align=center valign=top><td width=215 height=110></td></tr></table></td><td><table cellspacing=0 cellpadding=0><tr align=center><td width=200 height=150>&nbsp;</td></tr><tr align=center><td width=200 height=30 class=border bgcolor=#E0E0E0><b>WINNER</b></td></tr><tr align=center><td width=200 height=200>&nbsp;</td></tr></table></td></tr></table></td></tr></table><script type="text/javascript">
+
+ // if (typeof replaceurl == 'function') { 
+
+//		replaceurl();
+//	}
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-47019718-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+</script></body></html>

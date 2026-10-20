@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { Badge, Card, CardContent, CardHeader, CardTitle, Prob, ProbStat, Table, Td, Th } from "@/components/ui";
-import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
+import { getProjection, getProjectionCheck, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
 import type { VbClass } from "@/lib/engine/types";
 import type { Bracket } from "@/lib/engine/types";
 import { hasDistrictFinals } from "@/lib/engine/brackets";
@@ -33,7 +33,13 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
   const { cls } = await params;
   const vbClass = cls.toUpperCase() as VbClass;
   if (!SUPPORTED_CLASSES.includes(vbClass)) notFound();
-  const [season, proj, sim] = await Promise.all([loadSeason(), getProjection(vbClass), getSimulation(vbClass)]);
+  const [season, proj, sim, check] = await Promise.all([
+    loadSeason(),
+    getProjection(vbClass),
+    getSimulation(vbClass),
+    getProjectionCheck(vbClass),
+  ]);
+  const groupWord = hasDistrictFinals(vbClass) ? "sub-district" : "district";
   const n = sim.nSims;
   const hasDF = hasDistrictFinals(vbClass);
   const groupOf = new Map<string, { id: string; seed: number }>();
@@ -57,7 +63,12 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
             </a>
           </nav>
         </div>
-        <Badge variant="outline">home-court edge: {sim.ratingSummary.home.toFixed(2)} set-logit</Badge>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant={proj.official ? "good" : "outline"}>
+            {proj.official ? "Official NSAA pairings" : "Projected · official pairings Oct 22"}
+          </Badge>
+          <Badge variant="outline">home-court edge: {sim.ratingSummary.home.toFixed(2)} set-logit</Badge>
+        </div>
       </div>
 
       <section id="standings" className="max-md:scroll-mt-28">
@@ -153,26 +164,59 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
       </section>
 
       <section id="brackets" className="max-md:scroll-mt-28">
-        <h2 className="text-lg font-semibold mb-1">Projected {hasDF ? "sub-districts" : "districts"}</h2>
+        <h2 className="text-lg font-semibold mb-1">
+          {proj.official ? (hasDF ? "Sub-districts" : "Districts") : `Projected ${groupWord}s`}
+        </h2>
         <p className="text-sm text-muted mb-3">
           {FORMAT[vbClass](proj.overall.length)}
+          {proj.official && " Groups, seeds, sites and times are NSAA's; posted results are final and fixed in the simulation."}
         </p>
+        {check && (
+          <details className="mb-3 text-sm rounded-md border border-border bg-card px-3 py-2">
+            <summary className="cursor-pointer">
+              How our Oct 20 projection did: {check.sameGroup} of {check.total} teams in the right {groupWord},{" "}
+              {check.sameGroupAndSeed} with the exact seed.
+            </summary>
+            {check.misses.length > 0 && (
+              <ul className="mt-2 space-y-0.5 text-xs text-muted">
+                {check.misses.map((m) => (
+                  <li key={m.team}>
+                    <span className="text-foreground">{m.team}</span>: projected {m.projected}, official {m.official}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </details>
+        )}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {proj.brackets.map((b) => (
             <BracketCard key={b.id} bracket={b} winProb={(name) => (sim.teams[name]?.wonGroup ?? 0) / n} />
           ))}
         </div>
       </section>
+
+      {proj.districtFinals && (
+        <section id="district-finals" className="max-md:scroll-mt-28">
+          <h2 className="text-lg font-semibold mb-1">District finals</h2>
+          <p className="text-sm text-muted mb-3">
+            NSAA&apos;s pairings for Oct 31; the eight winners go to state. Percentages are each team&apos;s chance of
+            reaching state.
+          </p>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <BracketCard bracket={proj.districtFinals} winProb={(name) => (sim.teams[name]?.reachedState ?? 0) / n} />
+          </div>
+        </section>
+      )}
     </div>
   );
 }
 
 function BracketCard({ bracket, winProb }: { bracket: Bracket; winProb: (t: string) => number }) {
-  const label = (ref: string | null) => {
+  const label = (ref: string | null): string => {
     if (!ref) return "—";
     if (ref.startsWith("W:")) {
       const m = bracket.matches.find((x) => x.id === ref.slice(2));
-      return `Winner ${m?.label ?? ""}`;
+      return m?.result ? label(m.result.winner) : `Winner ${m?.label ?? ""}`;
     }
     const seed = bracket.teams.find((t) => t.name === ref)?.seed;
     return `#${seed} ${ref}`;
@@ -201,15 +245,29 @@ function BracketCard({ bracket, winProb }: { bracket: Bracket; winProb: (t: stri
         <div className="border-t border-border pt-2 space-y-1.5">
           {bracket.matches.map((m) => (
             <div key={m.id} className="text-xs">
-              <div className="flex justify-between text-muted">
+              <div className="flex justify-between gap-2 text-muted">
                 <span>{m.label}</span>
-                <span>{m.date}</span>
+                <span className="whitespace-nowrap">
+                  {m.date}
+                  {m.time && ` · ${m.time}`}
+                </span>
               </div>
               <div>
                 {label(m.top)} <span className="text-muted">vs</span> {label(m.bottom)}
               </div>
+              {m.result ? (
+                <div className="font-medium text-good">
+                  ✓ {m.result.winner} won {m.result.setsW}-{m.result.setsL}
+                </div>
+              ) : null}
               <div className="text-muted">
-                {m.host ? `at ${m.host}` : m.site ? `neutral: ${m.site}` : "at highest remaining seed"}
+                {m.officialSite
+                  ? `at ${m.officialSite}`
+                  : m.host
+                    ? `at ${m.host}`
+                    : m.site
+                      ? `neutral: ${m.site}`
+                      : "at highest remaining seed"}
               </div>
             </div>
           ))}

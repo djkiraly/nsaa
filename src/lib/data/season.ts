@@ -8,9 +8,9 @@ import { join } from "node:path";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { CLASS_ORDER, type VbClass } from "../engine/types";
-import { buildSeasonData } from "./load";
-import { NSAA_URLS } from "./load";
+import { bracketPages, buildSeasonData, NSAA_URLS } from "./load";
 import { project, runSimulation, type SeasonData, type SimResult } from "../engine/simulate";
+import { compareProjection, type ProjectionCheck } from "../engine/official";
 
 export const SEASON = Number(process.env.NSAA_SEASON ?? 2026);
 export const SEEDING_CUTOFF = process.env.NSAA_SEEDING_CUTOFF ?? `${SEASON}-10-20`;
@@ -41,10 +41,18 @@ type Db = NonNullable<typeof db>;
 export async function latestSnapshotIds(d: Db) {
   const s = schema.snapshots;
   return d
-    .selectDistinctOn([s.vbClass, s.kind], { id: s.id, vbClass: s.vbClass, kind: s.kind, fetchedAt: s.fetchedAt })
+    .selectDistinctOn([s.vbClass, s.kind, s.ref], {
+      id: s.id,
+      vbClass: s.vbClass,
+      kind: s.kind,
+      ref: s.ref,
+      fetchedAt: s.fetchedAt,
+    })
     .from(s)
-    .where(and(eq(s.season, SEASON), inArray(s.kind, ["export_csv", "regions", "subdistricts"])))
-    .orderBy(s.vbClass, s.kind, desc(s.fetchedAt));
+    .where(
+      and(eq(s.season, SEASON), inArray(s.kind, ["export_csv", "regions", "subdistricts", "bracket", "district_finals"])),
+    )
+    .orderBy(s.vbClass, s.kind, s.ref, desc(s.fetchedAt));
 }
 
 export async function loadFromDb(d: Db): Promise<LoadedSeason | null> {
@@ -56,7 +64,7 @@ export async function loadFromDb(d: Db): Promise<LoadedSeason | null> {
 
   const s = schema.snapshots;
   const rows = await d
-    .select({ vbClass: s.vbClass, kind: s.kind, body: s.body })
+    .select({ vbClass: s.vbClass, kind: s.kind, ref: s.ref, body: s.body })
     .from(s)
     .where(inArray(s.id, latest.map((r) => r.id)));
   const body = (vbClass: string, kind: string) => rows.find((r) => r.vbClass === vbClass && r.kind === kind)?.body;
@@ -66,9 +74,11 @@ export async function loadFromDb(d: Db): Promise<LoadedSeason | null> {
   // Assignments are fixed for the season; use the bundled copies until a refresh has stored them.
   for (const c of ["C1", "C2"] as const) regionHtml[c] = body(c, "regions") ?? readFixture(`regions_${c}.html`);
   const subdistrictHtml = body("ALL", "subdistricts") ?? readFixture("subdistricts.html");
+  const bracketHtml = Object.fromEntries(rows.filter((r) => r.kind === "bracket" && r.ref).map((r) => [r.ref!, r.body]));
+  const districtFinalsHtml = body("ALL", "district_finals");
 
   const season: LoadedSeason = {
-    data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml }),
+    data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml, bracketHtml, districtFinalsHtml }),
     snapshotKey: key,
     fetchedAt: new Date(Math.max(...exportsLatest.map((r) => r.fetchedAt.getTime()))),
     source: "db",
@@ -97,8 +107,20 @@ export async function loadSeason(): Promise<LoadedSeason> {
     regionHtml[c] = readFixture(`regions_${c}.html`);
   }
   if (!Object.values(exports).some(Boolean)) throw new Error("No season data: run `npm run scrape` or set DATABASE_URL");
+  const bracketHtml: Record<string, string> = {};
+  for (const [id] of bracketPages()) {
+    const html = readFixture(`brackets/${id}.html`);
+    if (html) bracketHtml[id] = html;
+  }
   const season: LoadedSeason = {
-    data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml: readFixture("subdistricts.html") }),
+    data: buildSeasonData({
+      seasonYear: SEASON,
+      exports,
+      regionHtml,
+      subdistrictHtml: readFixture("subdistricts.html"),
+      bracketHtml,
+      districtFinalsHtml: readFixture("district_finals.html"),
+    }),
     snapshotKey: key,
     fetchedAt: new Date(),
     source: "fixtures",
@@ -110,6 +132,14 @@ export async function loadSeason(): Promise<LoadedSeason> {
 export async function getProjection(vbClass: VbClass) {
   const s = await loadSeason();
   return { ...project(s.data, vbClass, SEEDING_CUTOFF), snapshotKey: s.snapshotKey, fetchedAt: s.fetchedAt };
+}
+
+/** Once NSAA's official groups are in: how our Oct 20 rule-based projection compared (null before). */
+export async function getProjectionCheck(vbClass: VbClass): Promise<ProjectionCheck | null> {
+  const s = await loadSeason();
+  const official = project(s.data, vbClass, SEEDING_CUTOFF);
+  if (!official.official) return null;
+  return compareProjection(project(s.data, vbClass, SEEDING_CUTOFF, { computedOnly: true }).groups, official.groups);
 }
 
 export async function getSimulation(vbClass: VbClass, nSims = 2000): Promise<SimResult> {
@@ -129,13 +159,14 @@ export async function warmSimulations() {
 
 /** Scrape NSAA and store a fresh snapshot set. Returns what was stored. */
 export async function refreshSnapshots(classes: VbClass[] = CLASS_ORDER) {
-  const stored: { vbClass: string; kind: string; bytes: number }[] = [];
+  const stored: { vbClass: string; kind: string; ref?: string; bytes: number }[] = [];
+  const failed: string[] = [];
   const put = async (vbClass: string, kind: string, url: string, ref?: string) => {
     const res = await fetch(url, { cache: "no-store", headers: { "user-agent": "nsaa-volleyball-agent/0.1" } });
     if (!res.ok) throw new Error(`${url} → ${res.status}`);
     const body = await res.text();
     if (db) await db.insert(schema.snapshots).values({ season: SEASON, vbClass, kind, ref, url, body });
-    stored.push({ vbClass, kind, bytes: body.length });
+    stored.push({ vbClass, kind, ref, bytes: body.length });
     return body;
   };
   const bodies: Record<string, string> = {};
@@ -148,7 +179,21 @@ export async function refreshSnapshots(classes: VbClass[] = CLASS_ORDER) {
     }
   }
   bodies.subdistricts = await put("ALL", "subdistricts", NSAA_URLS.subdistricts);
-  await put("ALL", "district_finals", NSAA_URLS.districtFinals);
+  bodies.district_finals = await put("ALL", "district_finals", NSAA_URLS.districtFinals);
+  // Official pairings + results: one small page per district / sub-district, a few at a time. A page that fails
+  // keeps its previous snapshot rather than failing the whole refresh.
+  const pages = bracketPages().filter(([id]) => classes.some((c) => id.startsWith(`${c}-`)));
+  for (let i = 0; i < pages.length; i += 6) {
+    await Promise.all(
+      pages.slice(i, i + 6).map(([id, distId]) =>
+        put(id.slice(0, id.lastIndexOf("-")), "bracket", NSAA_URLS.bracket(distId), id).then(
+          (body) => void (bodies[`bracket_${id}`] = body),
+          (e) => void failed.push(`${id}: ${e instanceof Error ? e.message : e}`),
+        ),
+      ),
+    );
+  }
+  if (failed.length) console.warn(`[refresh] ${failed.length} bracket page(s) failed: ${failed.join("; ")}`);
   cache = null; // force rebuild
-  return { stored, bodies };
+  return { stored, failed, bodies };
 }

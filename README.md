@@ -114,6 +114,22 @@ Tools available to the model: `get_standings`, `get_projected_brackets`, `simula
 - **Postseason results update averages** used for district-final seeding, the A/B wildcard, and state seeding, as
   the manual specifies.
 
+## Official pairings and live results
+
+The hourly refresh also stores NSAA's 58 bracket pages (`vbbrackets.php?distid=N`) and the district finals page
+(`vbfinals.php`); `src/lib/data/parse-brackets.ts` reads them. Both bracket layouts NSAA has used are handled
+(classic tables through 2025, Bootstrap cards as on the 2026 softball pages) — real samples of every state are in
+`tests/fixtures/nsaa/`.
+
+- **Pairings (Oct 22).** Once every bracket page for a class is posted, NSAA's groups and seeds replace the
+  projection, and each match shows NSAA's date, time and venue (the venue decides home court). A class keeps
+  projecting until all of its pages are up. The class page reports how the Oct 20 projection compared.
+- **Results (from Oct 26).** A winner reappears on the page with the score of the match it won; those results are
+  fixed in every simulation run (losers are out), and they count toward the averages that seed the district finals,
+  the A/B wildcard and state.
+- **District finals (C1/C2/D1/D2).** When all eight pairings for a class are posted, the simulation plays NSAA's
+  pairings and hosts instead of computing them, with any winners fixed.
+
 ## Formats by class (2026 manual)
 
 | Class | Groups | Hosting | To state |

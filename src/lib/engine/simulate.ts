@@ -11,9 +11,17 @@
  *   6. recompute averages → 8-team state bracket → simulate
  *   7. tally everything
  */
-import type { Bracket, BracketMatch, Match, SeededTeam, TeamRecord, VbClass } from "./types";
+import type { Bracket, BracketMatch, Match, MatchResult, OfficialClass, SeededTeam, TeamRecord, VbClass } from "./types";
 import { computeRecord, rankByWildcard } from "./wildcard";
 import {
+  applyOfficial,
+  completeOfficialGroups,
+  expectedGroupCount,
+  officialDistrictFinalsBracket,
+  siteHost,
+} from "./official";
+import {
+  DIST_IDS,
   formAssignedSubdistricts,
   formRegionSubdistricts,
   formSerpentineDistricts,
@@ -52,6 +60,8 @@ export interface SeasonData {
   regions: Partial<Record<VbClass, RegionAssignment[]>>;
   /** NSAA-assigned sub-districts (D1/D2). */
   subdistricts: Partial<Record<VbClass, SubdistrictAssignment[]>>;
+  /** Official pairings and results from NSAA's bracket and district-finals pages, once posted. */
+  official: Partial<Record<VbClass, OfficialClass>>;
   geo: Geo;
   ratings: Ratings;
 }
@@ -108,6 +118,15 @@ export interface Projection {
   overall: SeededTeam[];
   groups: Group[];
   brackets: Bracket[];
+  /** Groups, seeds and pairings are NSAA's official ones (all of the class's bracket pages are posted). */
+  official: boolean;
+  /** C1/C2/D1/D2 district finals as NSAA posted them, with results (absent until all 8 pairings are up). */
+  districtFinals?: Bracket;
+}
+
+export interface ProjectOptions {
+  /** Ignore official pairings — the rule-based projection, for comparing against NSAA's. */
+  computedOnly?: boolean;
 }
 
 interface SimResultRow {
@@ -180,13 +199,19 @@ function classOf(data: SeasonData, name: string, fallbackRows: Match[]): VbClass
 }
 
 /**
- * Deterministic projection: current records through cutoff, no simulation.
+ * Deterministic view: current records through cutoff, no simulation. Official groups, pairings and results once
+ * NSAA has posted them, otherwise the rule-based projection.
  */
-export function project(data: SeasonData, vbClass: VbClass, cutoff: string): Projection {
+export function project(data: SeasonData, vbClass: VbClass, cutoff: string, opts: ProjectOptions = {}): Projection {
   const names = [...data.teams].filter(([, c]) => c === vbClass).map(([n]) => n);
   const live = baseRecords(data);
   const records = names.map((n) => computeRecord(n, vbClass, data.matches, { throughDate: cutoff, liveRecords: live }));
-  return formGroupsAndBrackets(data, vbClass, records, () => 0.5);
+  const proj = formGroupsAndBrackets(data, vbClass, records, () => 0.5, opts);
+  if (opts.computedOnly) return proj;
+  const recordOf = (n: string) =>
+    records.find((r) => r.name === n) ?? computeRecord(n, vbClass, data.matches, { throughDate: cutoff, liveRecords: live });
+  const df = officialDistrictFinalsBracket(vbClass, data.official[vbClass]?.districtFinals, recordOf);
+  return df ? { ...proj, districtFinals: df } : proj;
 }
 
 function formGroupsAndBrackets(
@@ -194,16 +219,42 @@ function formGroupsAndBrackets(
   vbClass: VbClass,
   records: TeamRecord[],
   rng: () => number,
+  opts: ProjectOptions = {},
 ): Projection {
-  if (vbClass === "A" || vbClass === "B") {
+  const official = opts.computedOnly
+    ? null
+    : completeOfficialGroups(
+        data.official[vbClass]?.groups,
+        vbClass,
+        expectedGroupCount(vbClass, data.subdistricts[vbClass]?.length),
+      );
+  const serpentine = vbClass === "A" || vbClass === "B";
+  const build = (g: Group) => (serpentine ? buildDistrictBracket(g, data.geo) : buildSubdistrictBracket(g, data.geo));
+  if (official) {
+    // NSAA's groups and seeds; our builders give the bracket shape the simulation knows, NSAA's page the details.
+    const byName = new Map(records.map((r) => [r.name, r]));
+    const overall = rankByWildcard(records, data.matches, rng).map((r, i) => ({ ...r, seed: i + 1 }));
+    const groups: Group[] = official.map((og, i) => ({
+      id: og.id,
+      name: `${serpentine ? "District" : "Sub-district"} ${og.id}`,
+      vbClass,
+      distId: DIST_IDS[vbClass][i],
+      teams: og.seeds.flatMap((s) => {
+        const r = byName.get(s.name);
+        return r ? [{ ...r, seed: s.seed }] : [];
+      }),
+    }));
+    return { overall, groups, brackets: groups.map((g, i) => applyOfficial(build(g), official[i])), official: true };
+  }
+  if (serpentine) {
     const { overall, groups } = formSerpentineDistricts(vbClass, records, data.matches, rng);
-    return { overall, groups, brackets: groups.map((g) => buildDistrictBracket(g, data.geo)) };
+    return { overall, groups, brackets: groups.map(build), official: false };
   }
   const formed =
     vbClass === "C1" || vbClass === "C2"
       ? formRegionSubdistricts(vbClass, required(data.regions[vbClass], `region assignments for ${vbClass}`), records, data.matches, rng)
       : formAssignedSubdistricts(vbClass, required(data.subdistricts[vbClass], `sub-district assignments for ${vbClass}`), records, data.matches, rng);
-  return { ...formed, brackets: formed.groups.map((g) => buildSubdistrictBracket(g, data.geo)) };
+  return { ...formed, brackets: formed.groups.map(build), official: false };
 }
 
 function required<T>(v: T | undefined, what: string): T {
@@ -220,6 +271,11 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
   const base = baseRecords(data);
   const withDistrictFinals = hasDistrictFinals(cfg.vbClass);
   const groupFinalDate = groupDates(cfg.vbClass).final;
+  const officialDF = withDistrictFinals
+    ? officialDistrictFinalsBracket(cfg.vbClass, data.official[cfg.vbClass]?.districtFinals, (n) =>
+        computeRecord(n, cfg.vbClass, data.matches),
+      )
+    : null;
   const rowsByTeam = new Map<string, Match[]>();
   for (const m of data.matches) {
     if (!rowsByTeam.has(m.team)) rowsByTeam.set(m.team, []);
@@ -250,8 +306,13 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
       const r = live.get(team) ?? { wins: 0, losses: 0 };
       live.set(team, { wins: r.wins + (won ? 1 : 0), losses: r.losses + (won ? 0 : 1) });
     };
-    const play = (a: string, b: string, homeA: number, bestOf: 3 | 5, date: string, hostOf: string | null) => {
-      const [sa, sb] = simulateMatch(setP(a, b, homeA), bestOf, rng);
+    const play: PlayFn = (a, b, homeA, bestOf, date, hostOf, fixed) => {
+      // A result NSAA has posted is the same in every run; it still counts toward later seeding averages.
+      const [sa, sb] = fixed
+        ? fixed.winner === a
+          ? [fixed.setsW, fixed.setsL]
+          : [fixed.setsL, fixed.setsW]
+        : simulateMatch(setP(a, b, homeA), bestOf, rng);
       const aWon = sa > sb;
       simRows.push({ date, winner: aWon ? a : b, loser: aWon ? b : a, setsW: Math.max(sa, sb), setsL: Math.min(sa, sb), hostOf });
       bump(a, aWon);
@@ -310,7 +371,19 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
     // 5. district finals / wildcard
     let stateField: string[];
     let stateRecordsDate: string;
-    if (withDistrictFinals) {
+    if (withDistrictFinals && officialDF) {
+      // NSAA has posted the district-final pairings: play exactly those, with any results already in.
+      stateField = [];
+      for (const m of officialDF.matches) {
+        const [a, b] = [m.top!, m.bottom!];
+        for (const t of [a, b]) if (stats[t]) stats[t].reachedDistrictFinal++;
+        const homeA = m.host === a ? 1 : m.host === b ? -1 : 0;
+        const w = play(a, b, homeA, 5, m.date ?? DATES_2026.districtFinal, m.host ?? null, fixedFor(m, a, b));
+        tallyMatch(stats, "district-final", a, b, m.officialSite ?? m.host ?? "TBD");
+        stateField.push(w);
+      }
+      stateRecordsDate = DATES_2026.districtFinal;
+    } else if (withDistrictFinals) {
       // Sub-district winners + the best non-winners fill 16 spots (C1/C2: 10 + 6, D1/D2: 12 + 4).
       const after = recordsThrough(groupFinalDate);
       const winners = new Set(groupWinners.values());
@@ -373,12 +446,26 @@ function tallyMatch(stats: Record<string, TeamSimStats>, stage: Stage, a: string
   }
 }
 
-type PlayFn = (a: string, b: string, homeA: number, bestOf: 3 | 5, date: string, hostOf: string | null) => string;
+type PlayFn = (
+  a: string,
+  b: string,
+  homeA: number,
+  bestOf: 3 | 5,
+  date: string,
+  hostOf: string | null,
+  fixed?: MatchResult,
+) => string;
+
+/** The match's posted result, if it was between exactly these two teams. */
+function fixedFor(m: BracketMatch, a: string, b: string): MatchResult | undefined {
+  const r = m.result;
+  return r && ((r.winner === a && r.loser === b) || (r.winner === b && r.loser === a)) ? r : undefined;
+}
 
 /**
  * Resolve "W:<matchId>" references and play a bracket in round order.
- * Returns the winner of the last match. Host for Class B finals is resolved
- * here (highest remaining seed; neutral site if > 300 miles).
+ * Returns the winner of the last match. Hosts: NSAA's listed venue when posted; otherwise the rules — Class A/B
+ * finals at the highest remaining seed, Class B neutral site if > 300 miles. Posted results are fixed.
  */
 function simulateBracket(
   br: Bracket,
@@ -406,7 +493,10 @@ function simulateBracket(
     }
     let host = m.host;
     let site = m.site;
-    if (!host && !site) {
+    if (m.officialSite) {
+      host = siteHost(m.officialSite, a, b);
+      site = host ? undefined : m.officialSite;
+    } else if (!host && !site) {
       // Class A/B district final: highest remaining seed hosts (Class B: regardless of distance).
       host = seedOf(a) <= seedOf(b) ? a : b;
     } else if (br.vbClass === "B" && m.round < lastRound && host) {
@@ -417,7 +507,7 @@ function simulateBracket(
       }
     }
     const homeA = host === a ? 1 : host === b ? -1 : 0;
-    const w = play(a, b, homeA, 5, m.date ?? "2026-10-31", host ?? null);
+    const w = play(a, b, homeA, 5, m.date ?? "2026-10-31", host ?? null, fixedFor(m, a, b));
     winners.set(m.id, w);
     const stage = stageOf(m, m.round === lastRound);
     tallyMatch(stats, stage, a, b, host ?? site ?? "TBD");
