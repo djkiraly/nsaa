@@ -11,8 +11,13 @@ export const hasDb = !!process.env.DATABASE_URL;
 
 const g = globalThis as unknown as { __nsaaPool?: Pool };
 // allowExitOnIdle: idle connections don't keep short-lived processes (next build workers, scripts) alive.
+// PG_POOL_MAX=1 suits a single-connection dev database (e.g. PGlite's socket server).
 const pool = hasDb
-  ? (g.__nsaaPool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 5, allowExitOnIdle: true }))
+  ? (g.__nsaaPool ??= new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: Number(process.env.PG_POOL_MAX) || 5,
+      allowExitOnIdle: true,
+    }))
   : null;
 
 export const db = pool ? drizzle(pool, { schema }) : null;

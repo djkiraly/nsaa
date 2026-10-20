@@ -13,6 +13,7 @@
   --border: #e7e5e4;
   --card: #ffffff;
   --accent: #b91c1c;
+  --chart: #b91c1c;
   --accent-soft: #fee2e2;
   --good: #15803d;
   --good-soft: #dcfce7;
@@ -26,6 +27,7 @@
   --color-border: var(--border);
   --color-card: var(--card);
   --color-accent: var(--accent);
+  --color-chart: var(--chart);
   --color-accent-soft: var(--accent-soft);
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
@@ -44,6 +46,7 @@
   --border: #292524;
   --card: #151311;
   --accent: #f87171;
+  --chart: #ef4444;
   --accent-soft: #3b1212;
   --good: #4ade80;
   --good-soft: #0f2d1a;
@@ -59,6 +62,7 @@
     --border: #292524;
     --card: #151311;
     --accent: #f87171;
+    --chart: #ef4444;
     --accent-soft: #3b1212;
     --good: #4ade80;
     --good-soft: #0f2d1a;

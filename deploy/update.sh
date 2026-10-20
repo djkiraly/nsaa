@@ -23,6 +23,9 @@ main() {
   exec 9>"$lock"
   flock -n 9 || { log "another update is already running"; exit 0; }
 
+  # The IP-location database (analytics) is refreshed monthly regardless of code changes; the app reloads it itself.
+  node scripts/geoip.mjs --max-age-days 32 || log "IP-location database refresh failed — keeping the old one"
+
   if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
     log "local changes in $app_dir — not updating (git status to see them)"
     exit 1

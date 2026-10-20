@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CLASS_ORDER } from "@/lib/engine/types";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AnalyticsTracker } from "@/components/analytics";
 import "./globals.css";
 
 /** Runs before first paint: apply the saved theme (header toggle), else the system one, and follow system changes. */
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body className="min-h-full flex flex-col">
+        <AnalyticsTracker />
         {/* Phones: sticky, brand + theme toggle on one row and the nav (short labels) spread across the next. */}
         <header className="border-b border-border bg-card max-md:sticky max-md:top-0 max-md:z-20">
           <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between gap-4 max-md:h-auto max-md:flex-col max-md:items-stretch max-md:gap-1 max-md:pt-2 max-md:pb-1.5">

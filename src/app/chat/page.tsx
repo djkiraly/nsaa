@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, cn } from "@/components/ui";
+import { track } from "@/components/analytics";
 
 interface Msg {
   role: "user" | "assistant";
@@ -36,6 +37,7 @@ export default function ChatPage() {
     setMessages(next);
     setInput("");
     setBusy(true);
+    track("chat"); // counts the question; its text isn't sent
     try {
       const res = await fetch("/api/chat", {
         method: "POST",

@@ -156,6 +156,8 @@ export -n DOMAIN SERVICE_NAME PORT ANTHROPIC_API_KEY CERTBOT_EMAIL
 
 CRON_SECRET=$(get_env CRON_SECRET)
 if [[ -z $CRON_SECRET || $CRON_SECRET == change-me ]]; then set_env CRON_SECRET "$(random_hex 32)"; fi
+# Key for the hidden /analytics page (printed at the end).
+[[ -n $(get_env ANALYTICS_KEY) ]] || set_env ANALYTICS_KEY "$(random_hex 24)"
 
 pm2_online() { [[ $(pm2 pid "$SERVICE_NAME" 2>/dev/null) =~ ^[1-9][0-9]*$ ]]; }
 # The port may be held by this app itself: under PM2, or as the systemd unit older installs used (removed below).
@@ -198,6 +200,10 @@ npm run --silent db:migrate
 
 say "Building"
 npm run build
+
+say "IP-location database (analytics)"
+node scripts/geoip.mjs --max-age-days 30 \
+  || warn "couldn't download the IP-location database — visitor locations will show as unknown (retry: npm run geoip)"
 
 # --- 5. PM2 --------------------------------------------------------------------------------------------------------
 
@@ -291,6 +297,8 @@ cat <<EOF
   App:       pm2 logs $SERVICE_NAME   ·   pm2 restart $SERVICE_NAME
   Refresh:   $SERVICE_NAME-refresh runs hourly (it just ran once)  ·  now: pm2 restart $SERVICE_NAME-refresh
   Database:  $DB_NAME @ $DB_HOST:$DB_PORT
+  Analytics: $scheme://$DOMAIN/analytics?key=$(get_env ANALYTICS_KEY)
+             (private — open once to unlock, then $scheme://$DOMAIN/analytics works in that browser)
   Config:    $ENV_FILE  (after edits: pm2 restart $SERVICE_NAME)
   Update:    git pull && bash deploy/install.sh
 EOF

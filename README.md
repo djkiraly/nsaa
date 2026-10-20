@@ -130,6 +130,23 @@ The hourly refresh also stores NSAA's 58 bracket pages (`vbbrackets.php?distid=N
 - **District finals (C1/C2/D1/D2).** When all eight pairings for a class are posted, the simulation plays NSAA's
   pairings and hosts instead of computing them, with any winners fixed.
 
+## Usage analytics (private)
+
+First-party and self-hosted: no third-party script, no cookies for visitors, no IP addresses stored.
+
+- `src/components/analytics.tsx` sends a page view on every navigation and a heartbeat every 30 s while the page is
+  visible (that's how visit length is measured) to `POST /api/e`. A random visitor id lives in localStorage; a visit
+  ends after 30 idle minutes. Chat questions are counted (not their text). Browsers sending Global Privacy Control /
+  Do Not Track, bots, and the dashboard itself aren't counted.
+- Location (city / state / country) comes from DB-IP's free IP-to-City Lite database (CC BY 4.0), downloaded to
+  `data/geo/` by `npm run geoip` — the installer does it and the nightly update refreshes it monthly.
+- **Dashboard: `/analytics`** — not linked anywhere and answers 404 like any unknown page until you open
+  `/analytics?key=<ANALYTICS_KEY>` once, which sets an HttpOnly cookie (the key itself isn't stored in it). The
+  installer generates the key and prints the link. It shows visitors (new vs returning), visits, page views, average
+  and median visit length, bounce rate, chat questions, who's on the site now, visits per day/hour, pages, states,
+  cities, sources, devices, browsers and recent visits; ranges: 24 h / 7 d / 30 d / all.
+- Tables: `analytics_sessions`, `analytics_events` (migration `drizzle/0001_analytics.sql`).
+
 ## Formats by class (2026 manual)
 
 | Class | Groups | Hosting | To state |

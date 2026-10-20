@@ -34,6 +34,50 @@ export const simRuns = pgTable("sim_runs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Site analytics: one row per visit (session). A session ends after 30 minutes without activity; the browser sends
+ * a heartbeat every 30 s while the page is visible, so last_seen_at − started_at is the visit's length. No IP
+ * addresses are stored — only the city/region/country they resolve to.
+ */
+export const analyticsSessions = pgTable(
+  "analytics_sessions",
+  {
+    /** random id from the browser */
+    id: text("id").primaryKey(),
+    /** random id kept in the browser's localStorage — same person across visits */
+    visitorId: text("visitor_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    pageviews: integer("pageviews").notNull().default(0),
+    entryPath: text("entry_path"),
+    /** referring site's host, when it isn't this site */
+    referrer: text("referrer"),
+    country: text("country"),
+    region: text("region"),
+    city: text("city"),
+    /** mobile | tablet | desktop */
+    device: text("device"),
+    browser: text("browser"),
+    os: text("os"),
+  },
+  (t) => [index("analytics_sessions_started").on(t.startedAt), index("analytics_sessions_visitor").on(t.visitorId)],
+);
+
+/** Page views and other events (e.g. a chat question asked) within a session. */
+export const analyticsEvents = pgTable(
+  "analytics_events",
+  {
+    id: serial("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    visitorId: text("visitor_id").notNull(),
+    /** pageview | chat */
+    type: text("type").notNull(),
+    path: text("path").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("analytics_events_at").on(t.at, t.type)],
+);
+
 /** Chat transcripts (optional; useful for improving the agent). */
 export const chatMessages = pgTable("chat_messages", {
   id: serial("id").primaryKey(),
