@@ -74,7 +74,7 @@ apt_install() {
 render() {
   sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__PORT__|$PORT|g" -e "s|__SERVICE__|$SERVICE_NAME|g" \
       -e "s|__USER__|$APP_USER|g" -e "s|__APP_DIR__|$APP_DIR|g" -e "s|__NODE__|$NODE_BIN|g" \
-      -e "s|__WEBROOT__|$WEBROOT|g" -e "s|__SNIPPET__|$NGINX_SNIPPET|g" "$1"
+      -e "s|__WEBROOT__|$WEBROOT|g" -e "s|__SNIPPET__|${NGINX_SNIPPET:-}|g" "$1"
 }
 
 install_file() { render "$1" | sudo tee "$2" >/dev/null; sudo chmod 644 "$2"; }
