@@ -3,7 +3,7 @@
 Seedings, projected brackets, Monte Carlo simulations and a chat agent for Nebraska high-school volleyball
 districts and state — Class B and Class C2 for 2026.
 
-Stack: Next.js 16 · TypeScript · Tailwind 4 · Drizzle ORM + Postgres (optional) · Anthropic SDK · nginx + systemd.
+Stack: Next.js 16 · TypeScript · Tailwind 4 · Drizzle ORM + Postgres (optional) · Anthropic SDK · nginx + PM2.
 
 ## What it does
 
@@ -47,7 +47,7 @@ With a DB, `/api/refresh` stores every NSAA page it fetches (full audit trail) a
 latest snapshot set. If the DB is unreachable the app logs a warning and serves the fixtures. After changing
 `src/lib/db/schema.ts`, run `npm run db:generate` and commit the new migration.
 
-## Production deployment (volleyball.rocketcore.ai)
+## Production deployment (nsaa.rocketcore.ai)
 
 Self-hosted behind nginx on a Debian/Ubuntu box that already runs Postgres. On the server, as the user the app should
 run as (not root, needs sudo):
@@ -59,12 +59,14 @@ bash deploy/install.sh            # prompts for port, Anthropic key, Let's Encry
 
 `deploy/install.sh` is idempotent — re-run it after `git pull` to update. It:
 
-1. checks Node ≥ 20.9 and local Postgres; installs nginx / certbot with apt if missing
+1. checks Node ≥ 20.9 and local Postgres; installs nginx / certbot (apt) and PM2 (npm -g) if missing
 2. creates `.env` from `.env.example` (mode 600) with generated `CRON_SECRET` and DB password
 3. creates the Postgres role + database, runs migrations, `npm ci`, `npm run build`
-4. installs systemd units: `<service>` (the app on `127.0.0.1:$PORT`) and `<service>-refresh.timer` (hourly NSAA scrape)
+4. runs the app under the app user's PM2 (`ecosystem.config.cjs`): `<service>` (the app on `127.0.0.1:$PORT`) and
+   `<service>-refresh` (NSAA scrape, hourly via `cron_restart`); saves the list and registers PM2 to start on boot.
+   Removes the systemd units older versions of the installer created.
 5. writes the nginx site + proxy snippet (`deploy/nginx/`), gets a certificate with `certbot --webroot`, switches to HTTPS
-6. runs a first snapshot refresh
+6. the refresh job runs once at start, so a fresh NSAA snapshot lands right away
 
 DNS for the domain must point at the server before the certificate step; until then run with `SKIP_TLS=1`.
 Every setting can be passed as an env var for a non-interactive first run:
@@ -72,7 +74,7 @@ Every setting can be passed as an env var for a non-interactive first run:
 
 **Port.** `PORT` (and `HOST`, default `127.0.0.1`) in `.env` set where the app listens — choose one no other app on
 the server uses; the installer refuses a port that's taken. Next.js can't read `PORT` from `.env` on its own, so
-`npm start` goes through `scripts/start.mjs`. After editing `.env`, `sudo systemctl restart volleyball` (re-run the
+`npm start` goes through `scripts/start.mjs`. After editing `.env`, `pm2 restart <service>` (re-run the
 installer if you change `PORT` or `DOMAIN`, so nginx follows).
 
 **nginx** rate-limits `/api/chat` (6/min per IP, burst 5 — it spends Anthropic credits), other `/api/*` (30/min),

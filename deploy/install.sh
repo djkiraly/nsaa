@@ -10,7 +10,8 @@
 #   PORT=3100 CERTBOT_EMAIL=you@example.com ANTHROPIC_API_KEY=sk-ant-... bash deploy/install.sh
 # SKIP_TLS=1 configures nginx for plain HTTP only (e.g. while DNS isn't pointed at the server yet).
 #
-# Assumes Postgres is installed and running locally. Installs nginx and certbot with apt if they're missing.
+# Assumes Postgres is installed and running locally. Installs nginx and certbot with apt and PM2 with npm if they're
+# missing. The app and its hourly refresh run under the app user's PM2 (ecosystem.config.cjs), started on boot.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -73,8 +74,7 @@ apt_install() {
 
 render() {
   sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__PORT__|$PORT|g" -e "s|__SERVICE__|$SERVICE_NAME|g" \
-      -e "s|__USER__|$APP_USER|g" -e "s|__APP_DIR__|$APP_DIR|g" -e "s|__NODE__|$NODE_BIN|g" \
-      -e "s|__WEBROOT__|$WEBROOT|g" -e "s|__SNIPPET__|${NGINX_SNIPPET:-}|g" "$1"
+      -e "s|__WEBROOT__|$WEBROOT|g" -e "s|__SNIPPET__|$NGINX_SNIPPET|g" "$1"
 }
 
 install_file() { render "$1" | sudo tee "$2" >/dev/null; sudo chmod 644 "$2"; }
@@ -115,12 +115,17 @@ not_owned=$(find "$APP_DIR" -not -user "$APP_USER" -print -quit)
 command -v node >/dev/null || die "Node.js >= 20.9 is required (https://nodejs.org or nvm)"
 node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 20 || (a === 20 && b >= 9) ? 0 : 1)' \
   || die "Node.js >= 20.9 is required (found $(node -v))"
-NODE_BIN=$(command -v node)
 command -v npm >/dev/null || die "npm is required"
 command -v curl >/dev/null || apt_install curl
+if ! command -v pm2 >/dev/null; then
+  echo "  installing PM2"
+  if [[ -w $(npm root -g) ]]; then npm install -g --no-audit --no-fund pm2@latest
+  else sudo env "PATH=$PATH" npm install -g --no-audit --no-fund pm2@latest; fi
+fi
+PM2_BIN=$(command -v pm2) || die "PM2 install failed"
 
 pg -tAc 'select 1' >/dev/null || die "can't reach the local Postgres server as the postgres superuser"
-echo "  node $(node -v) · $(pg -tAc 'select version()' | cut -d' ' -f1-2) · user $APP_USER · $APP_DIR"
+echo "  node $(node -v) · pm2 $(pm2 -v) · $(pg -tAc 'select version()' | cut -d' ' -f1-2) · user $APP_USER · $APP_DIR"
 
 # --- 2. .env -------------------------------------------------------------------------------------------------------
 
@@ -135,11 +140,14 @@ chmod 600 "$ENV_FILE"
   || warn ".env.local / .env.production.local exist and override .env at runtime — remove them unless intended"
 
 ask DOMAIN "Public domain"
-ask SERVICE_NAME "Service name (systemd unit, database, nginx files)"
+ask SERVICE_NAME "Service name (PM2 process, database, nginx files)"
 ask PORT "App port — must not clash with other apps on this server"
 ask ANTHROPIC_API_KEY "Anthropic API key (blank disables chat)"
 if [[ ${SKIP_TLS:-0} != 1 ]]; then ask CERTBOT_EMAIL "Email for Let's Encrypt notices"; fi
 [[ -n $(get_env HOST) ]] || set_env HOST 127.0.0.1
+# Settings passed on the command line are exported; keep them out of PM2's environment, or PM2 would freeze them into
+# its process list and they'd silently win over later edits to .env.
+export -n DOMAIN SERVICE_NAME PORT ANTHROPIC_API_KEY CERTBOT_EMAIL
 
 [[ $DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || die "DOMAIN looks wrong: '$DOMAIN'"
 [[ $SERVICE_NAME =~ ^[a-z][a-z0-9_-]*$ ]] || die "SERVICE_NAME must be lowercase letters, digits, - or _"
@@ -149,7 +157,9 @@ if [[ ${SKIP_TLS:-0} != 1 ]]; then ask CERTBOT_EMAIL "Email for Let's Encrypt no
 CRON_SECRET=$(get_env CRON_SECRET)
 if [[ -z $CRON_SECRET || $CRON_SECRET == change-me ]]; then set_env CRON_SECRET "$(random_hex 32)"; fi
 
-if [[ -n $(ss -ltnH "sport = :$PORT" 2>/dev/null) ]] && ! systemctl is-active --quiet "$SERVICE_NAME"; then
+pm2_online() { [[ $(pm2 pid "$SERVICE_NAME" 2>/dev/null) =~ ^[1-9][0-9]*$ ]]; }
+# The port may be held by this app itself: under PM2, or as the systemd unit older installs used (removed below).
+if [[ -n $(ss -ltnH "sport = :$PORT" 2>/dev/null) ]] && ! pm2_online && ! systemctl is-active --quiet "$SERVICE_NAME"; then
   die "port $PORT is already in use by another process — choose another PORT in .env"
 fi
 
@@ -189,16 +199,31 @@ npm run --silent db:migrate
 say "Building"
 npm run build
 
-# --- 5. systemd ----------------------------------------------------------------------------------------------------
+# --- 5. PM2 --------------------------------------------------------------------------------------------------------
 
-say "Installing systemd units"
-install_file "$DEPLOY_DIR/systemd/app.service" "/etc/systemd/system/$SERVICE_NAME.service"
-install_file "$DEPLOY_DIR/systemd/refresh.service" "/etc/systemd/system/$SERVICE_NAME-refresh.service"
-install_file "$DEPLOY_DIR/systemd/refresh.timer" "/etc/systemd/system/$SERVICE_NAME-refresh.timer"
-sudo systemctl daemon-reload
-sudo systemctl enable --quiet "$SERVICE_NAME" "$SERVICE_NAME-refresh.timer"
-sudo systemctl restart "$SERVICE_NAME"
-sudo systemctl start "$SERVICE_NAME-refresh.timer"
+# Earlier versions of this installer ran the app as systemd units. Stop and remove them so PM2 owns the app and its
+# port. Only units this installer generated (or the empty file a failed run could leave) are touched.
+removed=0
+for unit in "$SERVICE_NAME-refresh.timer" "$SERVICE_NAME-refresh.service" "$SERVICE_NAME.service"; do
+  f=/etc/systemd/system/$unit
+  [[ -e $f ]] || continue
+  if [[ ! -s $f ]] || grep -q "Generated from deploy/systemd/" "$f"; then
+    [[ $removed == 1 ]] || say "Removing the old systemd units"
+    sudo systemctl disable --now --quiet "$unit" 2>/dev/null || true
+    sudo rm -f "$f"
+    echo "  removed $unit"
+    removed=1
+  else
+    warn "$f wasn't created by this installer — leaving it alone"
+  fi
+done
+if [[ $removed == 1 ]]; then
+  sudo systemctl daemon-reload
+  sudo systemctl reset-failed 2>/dev/null || true
+fi
+
+say "Starting $SERVICE_NAME with PM2"
+pm2 startOrReload ecosystem.config.cjs --update-env
 
 printf '  waiting for the app on 127.0.0.1:%s ' "$PORT"
 up=0
@@ -207,7 +232,14 @@ for _ in $(seq 90); do
   printf '.'; sleep 1
 done
 echo
-[[ $up == 1 ]] || die "app didn't come up — check: journalctl -u $SERVICE_NAME -n 100"
+[[ $up == 1 ]] || die "app didn't come up — check: pm2 logs $SERVICE_NAME --lines 100 --nostream"
+
+# Persist the process list and resurrect it on boot (systemd unit pm2-$APP_USER, created once).
+pm2 save --force >/dev/null
+if ! systemctl is-enabled --quiet "pm2-$APP_USER" 2>/dev/null; then
+  sudo env "PATH=$PATH" "$PM2_BIN" startup systemd -u "$APP_USER" --hp "$HOME"
+fi
+pm2 describe pm2-logrotate >/dev/null 2>&1 || pm2 install pm2-logrotate
 
 # --- 6. nginx + TLS ------------------------------------------------------------------------------------------------
 
@@ -251,19 +283,14 @@ if command -v ufw >/dev/null; then
   fi
 fi
 
-# --- 7. first snapshot ---------------------------------------------------------------------------------------------
-
-say "Fetching a fresh NSAA snapshot"
-sudo systemctl start "$SERVICE_NAME-refresh.service" \
-  || warn "initial refresh failed (journalctl -u $SERVICE_NAME-refresh) — the app serves the bundled fixtures until a refresh succeeds"
-
 scheme=https; [[ ${SKIP_TLS:-0} != 1 ]] || scheme=http
 say "Done"
+pm2 status
 cat <<EOF
   Site:      $scheme://$DOMAIN  →  127.0.0.1:$PORT
-  Service:   sudo systemctl status $SERVICE_NAME   ·   journalctl -u $SERVICE_NAME -f
-  Refresh:   hourly ($SERVICE_NAME-refresh.timer)  ·  now: sudo systemctl start $SERVICE_NAME-refresh
+  App:       pm2 logs $SERVICE_NAME   ·   pm2 restart $SERVICE_NAME
+  Refresh:   $SERVICE_NAME-refresh runs hourly (it just ran once)  ·  now: pm2 restart $SERVICE_NAME-refresh
   Database:  $DB_NAME @ $DB_HOST:$DB_PORT
-  Config:    $ENV_FILE  (restart after edits: sudo systemctl restart $SERVICE_NAME)
+  Config:    $ENV_FILE  (after edits: pm2 restart $SERVICE_NAME)
   Update:    git pull && bash deploy/install.sh
 EOF
