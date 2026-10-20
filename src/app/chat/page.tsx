@@ -74,8 +74,10 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-10rem)]">
-      <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+    // Phones: no fixed-height box (100vh ignores the browser toolbars) — the page scrolls and the input stays
+    // pinned to the bottom of the screen instead.
+    <div className="flex flex-col h-[calc(100vh-10rem)] max-md:h-auto max-md:min-h-[calc(100dvh-12rem)]">
+      <div className="flex-1 overflow-y-auto space-y-4 pr-1 max-md:overflow-visible max-md:pr-0">
         {messages.length === 0 && (
           <div className="text-sm text-muted space-y-3 max-w-2xl">
             <p>
@@ -99,7 +101,7 @@ export default function ChatPage() {
           <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
             <div
               className={cn(
-                "max-w-[85%] rounded-lg px-4 py-3 text-sm whitespace-pre-wrap",
+                "max-w-[85%] rounded-lg px-4 py-3 text-sm whitespace-pre-wrap max-md:max-w-[92%] max-md:px-3 max-md:[overflow-wrap:anywhere]",
                 m.role === "user" ? "bg-foreground text-background" : "bg-card border border-border",
               )}
             >
@@ -125,15 +127,17 @@ export default function ChatPage() {
           e.preventDefault();
           send(input);
         }}
-        className="mt-3 flex gap-2"
+        className="mt-3 flex gap-2 max-md:sticky max-md:bottom-0 max-md:z-10 max-md:-mx-4 max-md:px-4 max-md:py-3 max-md:bg-background max-md:border-t max-md:border-border"
       >
+        {/* text-base on phones: iOS Safari zooms the page when focusing an input under 16px. */}
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about seedings, brackets, matchups, sites…"
-          className="flex-1 h-10 rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-accent/30"
+          enterKeyHint="send"
+          className="flex-1 h-10 rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-accent/30 max-md:min-w-0 max-md:h-11 max-md:text-base"
         />
-        <Button type="submit" disabled={busy || !input.trim()}>
+        <Button type="submit" disabled={busy || !input.trim()} className="max-md:h-11 max-md:px-4">
           Send
         </Button>
       </form>

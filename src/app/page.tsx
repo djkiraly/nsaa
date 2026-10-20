@@ -48,9 +48,9 @@ export default async function Home() {
                 <div className="text-xs font-medium text-muted uppercase tracking-wide">Title odds ({n.toLocaleString()} sims)</div>
                 <ul className="space-y-1">
                   {top.map((t) => (
-                    <li key={t.name} className="flex items-center justify-between text-sm">
-                      <span>{t.name}</span>
-                      <span className="flex items-center gap-2">
+                    <li key={t.name} className="flex items-center justify-between text-sm max-md:gap-3">
+                      <span className="max-md:min-w-0">{t.name}</span>
+                      <span className="flex items-center gap-2 max-md:shrink-0">
                         <Badge variant="outline">state {Math.round((100 * t.reachedState) / n)}%</Badge>
                         <Badge variant="accent">title {Math.round((100 * t.champion) / n)}%</Badge>
                       </span>

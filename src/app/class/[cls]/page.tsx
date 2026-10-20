@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { Badge, Card, CardContent, CardHeader, CardTitle, Prob, Table, Td, Th } from "@/components/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle, Prob, ProbStat, Table, Td, Th } from "@/components/ui";
 import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
 import type { VbClass } from "@/lib/engine/types";
 import type { Bracket } from "@/lib/engine/types";
@@ -43,13 +43,55 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
             Wildcard standings through {SEEDING_CUTOFF} · {n.toLocaleString()} simulations · data{" "}
             {season.fetchedAt.toLocaleString("en-US", { timeZone: "America/Chicago" })} CT
           </p>
+          <nav className="md:hidden mt-3 flex gap-2 text-sm">
+            <a href="#standings" className="rounded-md border border-border bg-card px-3 py-1.5">
+              Standings ↓
+            </a>
+            <a href="#brackets" className="rounded-md border border-border bg-card px-3 py-1.5">
+              {hasDF ? "Sub-districts" : "Districts"} ↓
+            </a>
+          </nav>
         </div>
         <Badge variant="outline">home-court edge: {sim.ratingSummary.home.toFixed(2)} set-logit</Badge>
       </div>
 
-      <section>
+      <section id="standings" className="max-md:scroll-mt-28">
         <h2 className="text-lg font-semibold mb-2">Standings & simulation</h2>
-        <Card>
+        {/* Phones: one compact card per team instead of the 10-column table. */}
+        <Card className="md:hidden">
+          <ul className="divide-y divide-border/60">
+            {proj.overall.map((t) => {
+              const s = sim.teams[t.name];
+              const g = groupOf.get(t.name);
+              return (
+                <li key={t.name} className="px-3 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-medium">
+                        <span className="tabular text-muted mr-1.5">{t.seed}</span>
+                        {t.name}
+                      </div>
+                      <div className="text-xs text-muted tabular">
+                        {t.wins}-{t.losses} · avg {t.avg.toFixed(4)} · rating{" "}
+                        {(season.data.ratings.rating.get(t.name) ?? 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <Badge className="shrink-0">
+                      {g?.id} · #{g?.seed}
+                    </Badge>
+                  </div>
+                  <div className="mt-2 grid grid-cols-4 gap-3">
+                    <ProbStat label={hasDF ? "Win sub-dist" : "Win district"} value={s.wonGroup / n} />
+                    <ProbStat label={hasDF ? "Dist. final" : "Wildcard"} value={(hasDF ? s.reachedDistrictFinal : s.wildcard) / n} />
+                    <ProbStat label="State" value={s.reachedState / n} />
+                    <ProbStat label="Title" value={s.champion / n} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+        <Card className="max-md:hidden">
           <CardContent className="pt-4">
             <Table>
               <thead>
@@ -105,7 +147,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
         </Card>
       </section>
 
-      <section>
+      <section id="brackets" className="max-md:scroll-mt-28">
         <h2 className="text-lg font-semibold mb-1">Projected {hasDF ? "sub-districts" : "districts"}</h2>
         <p className="text-sm text-muted mb-3">
           {FORMAT[vbClass](proj.overall.length)}

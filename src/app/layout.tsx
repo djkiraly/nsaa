@@ -8,25 +8,28 @@ export const metadata: Metadata = {
   description: "Seedings, brackets and simulations for Nebraska high school volleyball districts and state.",
 };
 
+// `short` is the phone label: all eight links have to fit across a ~360px screen.
 const nav = [
-  { href: "/", label: "Overview" },
-  ...CLASS_ORDER.map((c) => ({ href: `/class/${c}`, label: `Class ${c}` })),
-  { href: "/chat", label: "Ask the agent" },
+  { href: "/", label: "Overview", short: "Overview" },
+  ...CLASS_ORDER.map((c) => ({ href: `/class/${c}`, label: `Class ${c}`, short: c })),
+  { href: "/chat", label: "Ask the agent", short: "Chat" },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
-        <header className="border-b border-border bg-card">
-          <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between gap-4">
-            <Link href="/" className="font-semibold tracking-tight">
+        {/* Phones: sticky, brand on one row and the nav (short labels) spread across the next. */}
+        <header className="border-b border-border bg-card max-md:sticky max-md:top-0 max-md:z-20">
+          <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between gap-4 max-md:h-auto max-md:flex-col max-md:items-stretch max-md:gap-1 max-md:pt-2.5 max-md:pb-1.5">
+            <Link href="/" className="font-semibold tracking-tight max-md:whitespace-nowrap">
               <span className="text-accent">NSAA</span> Volleyball Postseason
             </Link>
-            <nav className="flex items-center gap-0.5 text-sm overflow-x-auto whitespace-nowrap">
+            <nav className="flex items-center gap-0.5 text-sm overflow-x-auto whitespace-nowrap max-md:justify-between max-md:-mx-2">
               {nav.map((n) => (
-                <Link key={n.href} href={n.href} className="px-2.5 py-1.5 rounded-md hover:bg-muted-bg">
-                  {n.label}
+                <Link key={n.href} href={n.href} className="px-2.5 py-1.5 rounded-md hover:bg-muted-bg max-md:px-2 max-md:py-2">
+                  <span className="md:hidden">{n.short}</span>
+                  <span className="max-md:hidden">{n.label}</span>
                 </Link>
               ))}
             </nav>

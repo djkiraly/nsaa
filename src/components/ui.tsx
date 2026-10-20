@@ -73,6 +73,20 @@ export function Td({ className, ...p }: React.TdHTMLAttributes<HTMLTableCellElem
   return <td className={cn("px-2 py-1.5 border-b border-border/60 align-top", className)} {...p} />;
 }
 
+/** Compact labelled probability (phone layouts): label, number, thin bar underneath. */
+export function ProbStat({ label, value }: { label: string; value: number }) {
+  const p = Math.max(0, Math.min(1, value));
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] leading-tight text-muted truncate">{label}</div>
+      <div className="tabular text-sm font-medium leading-snug">{(p * 100).toFixed(0)}%</div>
+      <div className="mt-0.5 h-1 rounded bg-muted-bg overflow-hidden">
+        <div className="h-full bg-accent" style={{ width: `${p * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 /** Probability as a subtle bar + number. */
 export function Prob({ value }: { value: number }) {
   const p = Math.max(0, Math.min(1, value));
