@@ -108,6 +108,9 @@ say "Checking prerequisites"
 command -v sudo >/dev/null || die "sudo is required"
 sudo -v
 APP_USER=$(id -un)
+not_owned=$(find "$APP_DIR" -not -user "$APP_USER" -print -quit)
+[[ -z $not_owned ]] || die "$not_owned isn't owned by $APP_USER (cloned as another user?) — fix with:
+  sudo chown -R $APP_USER:$APP_USER $APP_DIR"
 
 command -v node >/dev/null || die "Node.js >= 20.9 is required (https://nodejs.org or nvm)"
 node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 20 || (a === 20 && b >= 9) ? 0 : 1)' \
