@@ -1,6 +1,11 @@
 @import "tailwindcss";
 
+/* `dark:` follows <html data-theme>, which the inline script in layout.tsx sets before first paint
+   (saved choice from the header toggle, otherwise the system preference). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 :root {
+  color-scheme: light;
   --background: #fafaf9;
   --foreground: #1c1917;
   --muted: #78716c;
@@ -28,8 +33,25 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* Dark: chosen with the toggle, or the system preference unless light was chosen (this second rule is also the
+   fallback when the theme script can't run). The two blocks must stay identical. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0c0a09;
+  --foreground: #f5f5f4;
+  --muted: #a8a29e;
+  --muted-bg: #1c1917;
+  --border: #292524;
+  --card: #151311;
+  --accent: #f87171;
+  --accent-soft: #3b1212;
+  --good: #4ade80;
+  --good-soft: #0f2d1a;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --background: #0c0a09;
     --foreground: #f5f5f4;
     --muted: #a8a29e;
