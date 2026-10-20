@@ -1,4 +1,8 @@
-/** Shown instantly on navigation while a page that isn't prefetched yet is on its way. */
+/**
+ * Shown instantly on navigation while a page that isn't prefetched yet is on its way. Scoped to the public pages
+ * ((site) group): a loading boundary starts streaming with status 200 before the page runs, which would turn
+ * /analytics' 404-without-access into a 200.
+ */
 export default function Loading() {
   return (
     <div className="space-y-6 animate-pulse" aria-busy="true" aria-label="Loading">

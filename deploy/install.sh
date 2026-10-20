@@ -74,23 +74,39 @@ apt_install() {
 
 render() {
   sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__PORT__|$PORT|g" -e "s|__SERVICE__|$SERVICE_NAME|g" \
-      -e "s|__WEBROOT__|$WEBROOT|g" -e "s|__SNIPPET__|$NGINX_SNIPPET|g" "$1"
+      -e "s|__WEBROOT__|$WEBROOT|g" -e "s|__SNIPPET__|$NGINX_SNIPPET|g" -e "s|__REALIP__|$NGINX_REALIP|g" "$1"
 }
 
 install_file() { render "$1" | sudo tee "$2" >/dev/null; sudo chmod 644 "$2"; }
 
+# Real visitor IPs behind Cloudflare: its current published ranges, or the bundled copy if they can't be fetched.
+cloudflare_realip() {
+  local v4 v6
+  v4=$(curl -fsS --max-time 15 https://www.cloudflare.com/ips-v4 2>/dev/null || true)
+  v6=$(curl -fsS --max-time 15 https://www.cloudflare.com/ips-v6 2>/dev/null || true)
+  if [[ -n $v4 && -n $v6 && $v4 =~ ^[0-9./[:space:]]+$ && $v6 =~ ^[0-9a-f:/[:space:]]+$ ]]; then
+    grep '^#' "$DEPLOY_DIR/nginx/cloudflare-realip.conf"
+    printf 'set_real_ip_from %s;\n' $v4 $v6
+    echo "real_ip_header CF-Connecting-IP;"
+  else
+    cat "$DEPLOY_DIR/nginx/cloudflare-realip.conf"
+  fi
+}
+
 # Install the site config + proxy snippet, test, reload. On a failed test, put the previous files back so a bad
 # config never takes down the other sites on this nginx.
 nginx_apply() {
-  local tpl=$1 f backups=()
-  for f in "$NGINX_SITE" "$NGINX_SNIPPET"; do
+  local tpl=$1 f backups=() files=("$NGINX_SITE" "$NGINX_SNIPPET" "$NGINX_REALIP")
+  for f in "${files[@]}"; do
     if sudo test -f "$f"; then sudo cp -p "$f" "$f.bak"; backups+=("$f"); fi
   done
+  cloudflare_realip | sudo tee "$NGINX_REALIP" >/dev/null
+  sudo chmod 644 "$NGINX_REALIP"
   install_file "$DEPLOY_DIR/nginx/locations.conf" "$NGINX_SNIPPET"
   install_file "$DEPLOY_DIR/nginx/$tpl" "$NGINX_SITE"
   [[ -z $NGINX_LINK ]] || sudo ln -sfn "$NGINX_SITE" "$NGINX_LINK"
   if ! sudo nginx -t -q; then
-    for f in "$NGINX_SITE" "$NGINX_SNIPPET"; do
+    for f in "${files[@]}"; do
       if [[ " ${backups[*]} " == *" $f "* ]]; then sudo mv "$f.bak" "$f"; else sudo rm -f "$f"; fi
     done
     [[ ${#backups[@]} -gt 0 || -z $NGINX_LINK ]] || sudo rm -f "$NGINX_LINK"
@@ -259,6 +275,7 @@ else
   NGINX_LINK=
 fi
 NGINX_SNIPPET=/etc/nginx/snippets/$SERVICE_NAME-locations.conf
+NGINX_REALIP=/etc/nginx/snippets/$SERVICE_NAME-cloudflare-realip.conf
 sudo install -d -m 755 /etc/nginx/snippets "$WEBROOT"
 
 if [[ ${SKIP_TLS:-0} == 1 ]]; then

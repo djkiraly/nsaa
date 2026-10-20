@@ -10,10 +10,11 @@ import { GEOIP_PATH } from "@/lib/analytics/geo";
 import { getDashboard, RANGES, TZ, type RangeKey, type Ranked } from "@/lib/analytics/queries";
 import { db } from "@/lib/db";
 
-// Private usage dashboard. Not linked anywhere; proxy.ts answers 404 unless the visitor has the access cookie
-// (set by opening /analytics?key=<ANALYTICS_KEY> once).
+// Private usage dashboard. Not linked anywhere; proxy.ts answers with the site's normal 404 unless the visitor has
+// the access cookie (set when /analytics?key=<ANALYTICS_KEY> is opened once).
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Analytics", robots: { index: false, follow: false } };
+// No title of its own: a 404 for this URL must look exactly like one for any URL that doesn't exist.
+export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 function duration(s: number): string {
   const sec = Math.round(s);
@@ -25,7 +26,7 @@ const pct = (x: number) => `${Math.round(100 * x)}%`;
 const num = (x: number) => x.toLocaleString("en-US");
 
 export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
-  // proxy.ts guards this route already; checking again means the page can't render without it.
+  // proxy.ts already turns away anyone without the cookie; checking again means the page can't render without it.
   if (!isAnalyticsCookie((await cookies()).get(ANALYTICS_COOKIE)?.value)) notFound();
   const requested = (await searchParams).range;
   const range: RangeKey = requested && requested in RANGES ? (requested as RangeKey) : "7d";
