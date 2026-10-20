@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CLASS_ORDER } from "@/lib/engine/types";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -9,8 +10,7 @@ export const metadata: Metadata = {
 
 const nav = [
   { href: "/", label: "Overview" },
-  { href: "/class/B", label: "Class B" },
-  { href: "/class/C2", label: "Class C2" },
+  ...CLASS_ORDER.map((c) => ({ href: `/class/${c}`, label: `Class ${c}` })),
   { href: "/chat", label: "Ask the agent" },
 ];
 
@@ -23,9 +23,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="font-semibold tracking-tight">
               <span className="text-accent">NSAA</span> Volleyball Postseason
             </Link>
-            <nav className="flex items-center gap-1 text-sm">
+            <nav className="flex items-center gap-0.5 text-sm overflow-x-auto whitespace-nowrap">
               {nav.map((n) => (
-                <Link key={n.href} href={n.href} className="px-3 py-1.5 rounded-md hover:bg-muted-bg">
+                <Link key={n.href} href={n.href} className="px-2.5 py-1.5 rounded-md hover:bg-muted-bg">
                   {n.label}
                 </Link>
               ))}

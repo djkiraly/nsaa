@@ -14,9 +14,13 @@ import { project, runSimulation, type SeasonData, type SimResult } from "../engi
 
 export const SEASON = Number(process.env.NSAA_SEASON ?? 2026);
 export const SEEDING_CUTOFF = process.env.NSAA_SEEDING_CUTOFF ?? `${SEASON}-10-20`;
-export const SUPPORTED_CLASSES: VbClass[] = ["B", "C2"];
+export const SUPPORTED_CLASSES: VbClass[] = CLASS_ORDER;
 
 const RAW_DIR = join(process.cwd(), "data", "raw");
+const readFixture = (file: string) => {
+  const p = join(RAW_DIR, file);
+  return existsSync(p) ? readFileSync(p, "utf8") : undefined;
+};
 
 export interface LoadedSeason {
   data: SeasonData;
@@ -43,6 +47,7 @@ export async function loadSeason(): Promise<LoadedSeason> {
   if (hasDb) {
     const exports: Partial<Record<VbClass, string>> = {};
     const regionHtml: Partial<Record<VbClass, string>> = {};
+    let subdistrictHtml: string | undefined;
     let newest = 0;
     let newestId = 0;
     let dbOk = true;
@@ -61,6 +66,7 @@ export async function loadSeason(): Promise<LoadedSeason> {
           if (r) regionHtml[c] = r.body;
         }
       }
+      subdistrictHtml = (await latestSnapshot("ALL", "subdistricts"))?.body;
     } catch (e) {
       // A bad DATABASE_URL or a Neon outage shouldn't take the site down — serve the fixtures instead.
       dbOk = false;
@@ -69,8 +75,11 @@ export async function loadSeason(): Promise<LoadedSeason> {
     if (dbOk && Object.keys(exports).length > 0) {
       const key = `db:${newestId}`;
       if (cache?.key === key) return cache.season;
+      // Assignments are fixed for the season; use the bundled copies until a refresh has stored them.
+      for (const c of ["C1", "C2"] as const) regionHtml[c] ??= readFixture(`regions_${c}.html`);
+      subdistrictHtml ??= readFixture("subdistricts.html");
       const season: LoadedSeason = {
-        data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml }),
+        data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml }),
         snapshotKey: key,
         fetchedAt: new Date(newest),
         source: "db",
@@ -85,14 +94,12 @@ export async function loadSeason(): Promise<LoadedSeason> {
   const exports: Partial<Record<VbClass, string>> = {};
   const regionHtml: Partial<Record<VbClass, string>> = {};
   for (const c of CLASS_ORDER) {
-    const p = join(RAW_DIR, `vb_${c}.csv`);
-    if (existsSync(p)) exports[c] = readFileSync(p, "utf8");
-    const r = join(RAW_DIR, `regions_${c}.html`);
-    if (existsSync(r)) regionHtml[c] = readFileSync(r, "utf8");
+    exports[c] = readFixture(`vb_${c}.csv`);
+    regionHtml[c] = readFixture(`regions_${c}.html`);
   }
-  if (Object.keys(exports).length === 0) throw new Error("No season data: run `npm run scrape` or set DATABASE_URL");
+  if (!Object.values(exports).some(Boolean)) throw new Error("No season data: run `npm run scrape` or set DATABASE_URL");
   const season: LoadedSeason = {
-    data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml }),
+    data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml: readFixture("subdistricts.html") }),
     snapshotKey: key,
     fetchedAt: new Date(),
     source: "fixtures",
@@ -116,6 +123,11 @@ export async function getSimulation(vbClass: VbClass, nSims = 2000): Promise<Sim
   return res;
 }
 
+/** Run every class's simulation (~1 s each) so the first page view after a refresh doesn't pay for it. */
+export async function warmSimulations() {
+  for (const c of SUPPORTED_CLASSES) await getSimulation(c);
+}
+
 /** Scrape NSAA and store a fresh snapshot set. Returns what was stored. */
 export async function refreshSnapshots(classes: VbClass[] = CLASS_ORDER) {
   const stored: { vbClass: string; kind: string; bytes: number }[] = [];
@@ -136,6 +148,7 @@ export async function refreshSnapshots(classes: VbClass[] = CLASS_ORDER) {
       bodies[`standings_${c}`] = await put(c, "region_standings", NSAA_URLS.regionStandings(c));
     }
   }
+  bodies.subdistricts = await put("ALL", "subdistricts", NSAA_URLS.subdistricts);
   await put("ALL", "district_finals", NSAA_URLS.districtFinals);
   cache = null; // force rebuild
   return { stored, bodies };

@@ -24,6 +24,7 @@ async function get(url: string) {
     }
     console.log(`fetched ${c}`);
   }
+  writeFileSync(join(RAW, `subdistricts.html`), await get(NSAA_URLS.subdistricts));
   writeFileSync(join(RAW, `district_finals.html`), await get(NSAA_URLS.districtFinals));
   if (process.env.DATABASE_URL) {
     const { refreshSnapshots } = await import("../src/lib/data/season");

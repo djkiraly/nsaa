@@ -1,7 +1,7 @@
 # NSAA Volleyball Postseason Agent
 
 Seedings, projected brackets, Monte Carlo simulations and a chat agent for Nebraska high-school volleyball
-districts and state — Class B and Class C2 for 2026.
+districts and state — all six classes (A, B, C1, C2, D1, D2) for 2026.
 
 Stack: Next.js 16 · TypeScript · Tailwind 4 · Drizzle ORM + Postgres (optional) · Anthropic SDK · nginx + PM2.
 
@@ -10,8 +10,8 @@ Stack: Next.js 16 · TypeScript · Tailwind 4 · Drizzle ORM + Postgres (optiona
 | Layer | What |
 | --- | --- |
 | `src/lib/engine/wildcard.ts` | NSAA wildcard point formula + tiebreakers. Reproduces every published average exactly (tested). |
-| `src/lib/engine/seeding.ts` | Class B serpentine into 7 districts; C1/C2 region → sub-district snake. Matches NSAA's live page (tested). |
-| `src/lib/engine/brackets.ts` | 4/5/6-team sub-district and district brackets, host & neutral-site rules, 16-team district finals, 8-team state. |
+| `src/lib/engine/seeding.ts` | A/B serpentine into 7 districts; C1/C2 region → sub-district snake (matches NSAA's live pages, tested); D1/D2 NSAA-assigned sub-districts. |
+| `src/lib/engine/brackets.ts` | 4/5/6-team sub-district and district brackets, per-class host & neutral-site rules and dates, 16-team district finals, 8-team state. |
 | `src/lib/engine/ratings.ts` | Set-level Bradley-Terry power ratings with home-court term, fit on this season's results (all six classes). |
 | `src/lib/engine/simulate.ts` | Monte Carlo: remaining regular season → seeding → brackets → district finals / wildcard → state. |
 | `src/lib/data/*` | NSAA CSV/HTML parsers, loader, scraper, snapshot storage. |
@@ -98,17 +98,23 @@ Tools available to the model: `get_standings`, `get_projected_brackets`, `simula
   injuries, rosters, or momentum — treat probabilities as approximate and expect a good coach's eye to beat it on
   individual matches.
 - **Sites** follow the manual's rules with straight-line × 1.17 road-mile estimates from `src/lib/engine/geo.ts`.
-  `H&H`'s home site is a guess — verify.
-- **Postseason results update averages** used for district-final seeding, the Class B wildcard, and state seeding, as
+  `H&H`'s home site is a guess — verify. Only B and C2 schools have coordinates so far. A and D1/D2 don't need them
+  (the higher / #1 seed always hosts), but C1's "play-in hosted by the higher seed if closer" rule falls back to the
+  #1 seed, and `distance_between` can't measure A/C1/D schools.
+- **Postseason results update averages** used for district-final seeding, the A/B wildcard, and state seeding, as
   the manual specifies.
+
+## Formats by class (2026 manual)
+
+| Class | Groups | Hosting | To state |
+| --- | --- | --- | --- |
+| A (34) | 7 districts, serpentine | higher seed, every round | 7 champions + 1 wildcard |
+| B (31) | 7 districts, serpentine | higher seed; neutral site if > 300 mi before the final | 7 champions + 1 wildcard |
+| C1/C2 (~55) | 4 regions → 10 sub-districts | #1 seed (play-in exception) | 10 winners + 6 at-large → 16-team district finals |
+| D1/D2 (55) | 12 NSAA-assigned sub-districts (`distassign.php`) | #1 seed hosts all | 12 winners + 4 at-large → 16-team district finals |
 
 ## Key 2026 dates
 
-Seeding through Tue Oct 20 → released Thu Oct 22 · B districts Oct 27/29/31 · C2 sub-districts Oct 26–28 ·
-District finals Sat Oct 31 · State in Lincoln Nov 4–7.
-
-## Extending to other classes
-
-Class A uses the same code path as B (7-district serpentine; add it to `SUPPORTED_CLASSES` and `formGroupsAndBrackets`).
-C1 already works through the C2 path once its region HTML is scraped (`regions_C1.html` is included). D1/D2 need the
-geographic sub-district assignment page parsed (`distassign.php`) — not yet implemented.
+Seeding through Tue Oct 20 → released Thu Oct 22 · A districts Oct 26–28 · B districts Oct 27/29/31 ·
+C1/C2 sub-districts Oct 26–28 · D1/D2 sub-districts Oct 26–27 · District finals Sat Oct 31 · State in Lincoln Nov 4–7
+(quarterfinals Nov 4 for A/B/C1, Nov 5 for C2/D1/D2).

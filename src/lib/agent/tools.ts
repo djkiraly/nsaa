@@ -8,6 +8,8 @@ import { NSAA_URLS } from "../data/load";
 import { parseBracketPage, parseDistrictFinals } from "../data/parse-html";
 import { matchWinProb, setWinProb } from "../engine/ratings";
 import { distanceMiles } from "../engine/geo";
+import { hasDistrictFinals } from "../engine/brackets";
+import { DIST_IDS } from "../engine/seeding";
 import { computeRecord } from "../engine/wildcard";
 import type { VbClass } from "../engine/types";
 import type { Stage, TeamSimStats } from "../engine/simulate";
@@ -18,7 +20,7 @@ type Json = Record<string, unknown>;
 const classParam = {
   type: "string" as const,
   enum: SUPPORTED_CLASSES,
-  description: "NSAA volleyball class (B or C2 supported this version)",
+  description: "NSAA volleyball class: A, B, C1, C2, D1 or D2",
 };
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
@@ -31,10 +33,10 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: "get_projected_brackets",
     description:
-      "Projected district (B) or sub-district (C2) groupings and bracket pairings with hosts/sites and dates, computed from current wildcard averages using the NSAA serpentine rules. Optionally filter to one group id like 'B-6' or 'C2-7'.",
+      "Projected district (A/B) or sub-district (C1/C2/D1/D2) groupings and bracket pairings with hosts/sites and dates, computed from current wildcard averages using the NSAA rules (A/B serpentine, C regions + serpentine, D NSAA-assigned sub-districts). Optionally filter to one group id like 'A-3', 'B-6', 'C2-7' or 'D1-12'.",
     input_schema: {
       type: "object",
-      properties: { vbClass: classParam, groupId: { type: "string", description: "e.g. B-6 or C2-7" } },
+      properties: { vbClass: classParam, groupId: { type: "string", description: "e.g. A-3, B-6, C2-7, D1-12" } },
       required: ["vbClass"],
     },
   },
@@ -80,7 +82,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: "fetch_nsaa_bracket",
     description:
-      "Fetch the live NSAA bracket page for a district/sub-district (published Thursday Oct 22 for 2026). Returns site, times and any results NSAA has posted. Pass a group id like 'B-6' or 'C2-7'.",
+      "Fetch the live NSAA bracket page for a district/sub-district (published Thursday Oct 22 for 2026). Returns site, times and any results NSAA has posted. Pass a group id like 'A-3', 'B-6', 'C2-7' or 'D1-12'.",
     input_schema: { type: "object", properties: { groupId: { type: "string" } }, required: ["groupId"] },
   },
   {
@@ -122,17 +124,21 @@ function groupIdToDistId(groupId: string): number | undefined {
   const m = groupId.toUpperCase().match(/^([ABCD][12]?)-(\d{1,2})$/);
   if (!m) return undefined;
   const [, cls, n] = m;
-  const i = Number(n) - 1;
-  const table: Record<string, number[]> = {
-    A: [2, 3, 4, 5, 6, 7, 87],
-    B: [8, 9, 10, 11, 12, 13, 88],
-    C1: [38, 39, 40, 41, 42, 43, 44, 45, 46, 47],
-    C2: [50, 51, 52, 53, 54, 55, 56, 57, 58, 59],
-    D1: [62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73],
-    D2: [74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85],
-  };
-  return table[cls]?.[i];
+  return DIST_IDS[cls as VbClass]?.[Number(n) - 1];
 }
+
+const C_NOTE =
+  "The #1 seed hosts sub-district semifinals and the final. In 5/6-team sub-districts the higher seed hosts the #4v#5 / #3v#6 match if it is closer than traveling to the #1 seed. Sub-district winners + 6 best remaining averages go to the Oct 31 district finals, hosted by the higher seed.";
+const D_NOTE =
+  "Sub-districts are assigned geographically by the NSAA (not seeded across the class). The #1 seed hosts the whole sub-district (Oct 26–27). The 12 winners + the 4 best remaining averages go to the Oct 31 district finals, hosted by the higher seed.";
+const BRACKET_NOTES: Record<VbClass, string> = {
+  A: "Every match is hosted by the higher seed — including the Oct 28 district final (highest remaining seed); there are no neutral sites. The 7 district champions plus the best remaining wildcard average go to state.",
+  B: "District finals (Oct 31) are hosted by the highest remaining seed; earlier rounds move to a neutral site (McCook, Lexington, Hastings, GI Northwest) if the two schools are > 300 miles apart.",
+  C1: C_NOTE,
+  C2: C_NOTE,
+  D1: D_NOTE,
+  D2: D_NOTE,
+};
 
 export async function runTool(name: string, input: Json): Promise<Json> {
   const season = await loadSeason();
@@ -166,10 +172,7 @@ export async function runTool(name: string, input: Json): Promise<Json> {
       const brackets = proj.brackets.filter((b) => !want || b.id === want);
       return {
         vbClass,
-        note:
-          vbClass === "B"
-            ? "District finals (Oct 31) are hosted by the highest remaining seed; earlier rounds move to a neutral site (McCook, Lexington, Hastings, GI Northwest) if the two schools are > 300 miles apart."
-            : "The #1 seed hosts sub-district semifinals and the final. In 5/6-team sub-districts the higher seed hosts the #4v#5 / #3v#6 match if it is closer than traveling to the #1 seed. Sub-district winners + 6 best remaining averages go to the Oct 31 district finals, hosted by the higher seed.",
+        note: BRACKET_NOTES[vbClass],
         brackets: brackets.map((b) => ({
           id: b.id,
           teams: b.teams.map((t) => ({ seed: t.seed, team: t.name, record: `${t.wins}-${t.losses}`, avg: Number(t.avg.toFixed(4)) })),
@@ -290,7 +293,7 @@ export async function runTool(name: string, input: Json): Promise<Json> {
     }
     case "fetch_district_finals": {
       const html = await (await fetch(NSAA_URLS.districtFinals, { cache: "no-store" })).text();
-      return { url: NSAA_URLS.districtFinals, finals: parseDistrictFinals(html).filter((f) => f.id.startsWith("C2") || f.id.startsWith("C1")) };
+      return { url: NSAA_URLS.districtFinals, finals: parseDistrictFinals(html) };
     }
     case "distance_between": {
       const a = findTeam(data.geo.keys(), String(input.a));
@@ -306,11 +309,10 @@ export async function runTool(name: string, input: Json): Promise<Json> {
 }
 
 function summarize(t: TeamSimStats, n: number, vbClass: VbClass): Json {
-  const isC = vbClass.startsWith("C");
   return {
     team: t.name,
     pWinGroup: pct(t.wonGroup, n),
-    ...(isC ? { pReachDistrictFinal: pct(t.reachedDistrictFinal, n) } : { pWildcard: pct(t.wildcard, n) }),
+    ...(hasDistrictFinals(vbClass) ? { pReachDistrictFinal: pct(t.reachedDistrictFinal, n) } : { pWildcard: pct(t.wildcard, n) }),
     pReachState: pct(t.reachedState, n),
     pStateSemifinal: pct(t.wonStateQuarter, n),
     pStateFinal: pct(t.wonStateSemi, n),

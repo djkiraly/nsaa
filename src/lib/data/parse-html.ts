@@ -1,6 +1,7 @@
 /**
  * Parsers for NSAA HTML pages:
  *  - Region assignments  (nsaaforms/regions/assignments.php?sport=vb&class=C2)
+ *  - District / sub-district assignments (distassign.php?sport=vb — D1/D2 schools are listed before seeding)
  *  - Wildcard leaders    (wildcards/points/index.php?sport=vb&year=2026&class=B)
  *  - Bracket pages       (nsaaforms/officials/vbbrackets.php?distid=N)
  *  - District finals     (nsaaforms/officials/vbfinals.php)
@@ -33,6 +34,45 @@ export function parseRegionAssignments(html: string): RegionAssignment[] {
         });
     });
   return regions.filter((r) => r.region > 0);
+}
+
+/**
+ * District / sub-district assignments page. Returns group id ("D1-7") → school names as NSAA lists them, which can
+ * differ from the schedule-export names (e.g. a trailing "(BDS)"); match them with `matchTeamName`. Groups whose
+ * schools aren't listed yet (A/B/C before seeding) come back empty.
+ */
+export function parseSubdistrictAssignments(html: string): Record<string, string[]> {
+  const $ = cheerio.load(html);
+  const out: Record<string, string[]> = {};
+  let current: string | null = null;
+  $("tr").each((_, tr) => {
+    const heading = $(tr).text().match(/(?:Sub-?district|District)\s+([A-D][12]?-\d{1,2}):/i);
+    if (heading) {
+      current = heading[1].toUpperCase();
+      out[current] = [];
+      return;
+    }
+    const tds = $(tr).find("td");
+    if (current && /Schools Assigned/i.test($(tds[0]).text())) {
+      out[current] = ($(tds[1]).html() ?? "")
+        .split(/<br\s*\/?>/i)
+        .map((s) => cheerio.load(s).text().replace(/ /g, " ").trim())
+        .filter(Boolean);
+    }
+  });
+  return out;
+}
+
+/** Find `name` among `candidates`: exact, else ignoring case, punctuation and parenthetical suffixes. */
+export function matchTeamName(name: string, candidates: string[]): string | undefined {
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/\([^)]*\)/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const n = norm(name);
+  return candidates.find((c) => c === name) ?? candidates.find((c) => norm(c) === n);
 }
 
 export interface LeaderRow {

@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildSeasonData } from "../src/lib/data/load";
-import { parseWildcardLeaders, parseRegionAssignments, parseRegionStandingsSubdistricts } from "../src/lib/data/parse-html";
+import {
+  parseWildcardLeaders,
+  parseRegionAssignments,
+  parseRegionStandingsSubdistricts,
+  parseSubdistrictAssignments,
+} from "../src/lib/data/parse-html";
 import { computeRecord, matchPoints, divisionFor, classBonus } from "../src/lib/engine/wildcard";
 import { serpentine } from "../src/lib/engine/seeding";
 import { project, runSimulation } from "../src/lib/engine/simulate";
@@ -17,7 +22,9 @@ const data = buildSeasonData({
   seasonYear: 2026,
   exports: Object.fromEntries(CLASSES.map((c) => [c, read(`vb_${c}.csv`)])),
   regionHtml: { C1: read("regions_C1.html"), C2: read("regions_C2.html") },
+  subdistrictHtml: read("subdistricts.html"),
 });
+const classTeams = (c: VbClass) => [...data.teams].filter(([, k]) => k === c).map(([n]) => n);
 
 describe("wildcard formula", () => {
   it("matches the manual's point table", () => {
@@ -39,7 +46,7 @@ describe("wildcard formula", () => {
 });
 
 describe("reproduces NSAA published averages", () => {
-  for (const c of ["B", "C2"] as const) {
+  for (const c of CLASSES) {
     it(`class ${c}: every team's record and average matches the leaders page`, () => {
       const leaders = parseWildcardLeaders(read(`points_${c}.html`));
       expect(leaders.length).toBeGreaterThan(20);
@@ -75,12 +82,40 @@ describe("seeding", () => {
     expect(regions.map((r) => r.teams.length)).toEqual([17, 16, 17, 5]);
     expect(regions[3].teams).toContain("Mitchell");
   });
-  it("C2 sub-districts match NSAA's live standings page (same snapshot)", () => {
-    const nsaa = parseRegionStandingsSubdistricts(read("standings_C2.html"));
-    expect(Object.keys(nsaa).sort()).toEqual(["C2-1","C2-10","C2-2","C2-3","C2-4","C2-5","C2-6","C2-7","C2-8","C2-9"]);
-    const proj = project(data, "C2", "2026-10-31");
-    const ours = Object.fromEntries(proj.groups.map((g) => [g.id, g.teams.map((t) => t.name)]));
-    expect(ours).toEqual(nsaa);
+  for (const c of ["C1", "C2"] as const) {
+    it(`${c} sub-districts match NSAA's live standings page (same snapshot)`, () => {
+      const nsaa = parseRegionStandingsSubdistricts(read(`standings_${c}.html`));
+      expect(Object.keys(nsaa).sort()).toEqual(
+        Array.from({ length: 10 }, (_, i) => `${c}-${i + 1}`).sort(),
+      );
+      const proj = project(data, c, "2026-10-31");
+      const ours = Object.fromEntries(proj.groups.map((g) => [g.id, g.teams.map((t) => t.name)]));
+      expect(ours).toEqual(nsaa);
+    });
+  }
+  it("Class A: 34 teams serpentine into six 5-team districts and a 4-team A-7; higher seed always hosts", () => {
+    const proj = project(data, "A", "2026-10-31");
+    expect(proj.overall).toHaveLength(34);
+    expect(proj.groups.map((g) => g.teams.length)).toEqual([5, 5, 5, 5, 5, 5, 4]);
+    expect(proj.groups[6].teams.map((t) => proj.overall.findIndex((o) => o.name === t.name) + 1)).toEqual([7, 8, 21, 22]);
+    for (const b of proj.brackets) for (const m of b.matches) expect(m.site).toBeUndefined();
+    const r1 = proj.brackets[0].matches.find((m) => m.label === "#4 vs #5")!;
+    expect([r1.date, r1.host]).toEqual(["2026-10-26", proj.groups[0].teams[3].name]);
+  });
+  it("D1/D2: 12 NSAA-assigned sub-districts each, covering every team once; #1 seed hosts everything", () => {
+    const listed = parseSubdistrictAssignments(read("subdistricts.html"));
+    for (const c of ["D1", "D2"] as const) {
+      expect(Object.keys(listed).filter((k) => k.startsWith(`${c}-`))).toHaveLength(12);
+      const proj = project(data, c, "2026-10-31");
+      expect(proj.groups.map((g) => g.id)).toEqual(Array.from({ length: 12 }, (_, i) => `${c}-${i + 1}`));
+      const assigned = proj.groups.flatMap((g) => g.teams.map((t) => t.name));
+      expect(assigned.sort()).toEqual(classTeams(c).sort());
+      for (const b of proj.brackets) {
+        const one = b.teams[0].name;
+        for (const m of b.matches) expect(m.host).toBe(one);
+        expect(b.matches.at(-1)!.date).toBe("2026-10-27");
+      }
+    }
   });
   it("Class B districts: Norris #1 in B-1, Gering in B-6", () => {
     const proj = project(data, "B", "2026-10-31");
@@ -105,16 +140,16 @@ describe("ratings", () => {
 });
 
 describe("simulation", () => {
-  it("runs Class B and C2 end to end with sane totals", () => {
-    for (const c of ["B", "C2"] as const) {
+  for (const c of CLASSES) {
+    it(`runs Class ${c} end to end with sane totals`, () => {
       const res = runSimulation(data, { vbClass: c, cutoff: "2026-10-20", nSims: 200, seed: 7 });
       const teams = Object.values(res.teams);
-      const champions = teams.reduce((s, t) => s + t.champion, 0);
-      const stateApps = teams.reduce((s, t) => s + t.reachedState, 0);
-      expect(champions).toBe(200);
-      expect(stateApps).toBe(200 * 8);
-      if (c === "B") expect(teams.reduce((s, t) => s + t.wildcard, 0)).toBe(200);
-      if (c === "C2") expect(teams.reduce((s, t) => s + t.reachedDistrictFinal, 0)).toBe(200 * 16);
-    }
-  });
+      const sum = (f: (t: (typeof teams)[number]) => number) => teams.reduce((s, t) => s + f(t), 0);
+      expect(sum((t) => t.champion)).toBe(200);
+      expect(sum((t) => t.reachedState)).toBe(200 * 8);
+      expect(sum((t) => t.wonGroup)).toBe(200 * res.projection.groups.length);
+      if (c === "A" || c === "B") expect(sum((t) => t.wildcard)).toBe(200);
+      else expect(sum((t) => t.reachedDistrictFinal)).toBe(200 * 16);
+    });
+  }
 });

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { refreshSnapshots } from "@/lib/data/season";
+import { refreshSnapshots, warmSimulations } from "@/lib/data/season";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -12,5 +12,6 @@ export async function GET(req: NextRequest) {
     return new Response("unauthorized", { status: 401 });
   }
   const { stored } = await refreshSnapshots();
+  await warmSimulations();
   return Response.json({ ok: true, stored, at: new Date().toISOString() });
 }

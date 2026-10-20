@@ -3,8 +3,26 @@ import { Badge, Card, CardContent, CardHeader, CardTitle, Prob, Table, Td, Th } 
 import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
 import type { VbClass } from "@/lib/engine/types";
 import type { Bracket } from "@/lib/engine/types";
+import { hasDistrictFinals } from "@/lib/engine/brackets";
 
 export const dynamic = "force-dynamic";
+
+const C_FORMAT =
+  "Regions serpentine into sub-districts by wildcard average. #1 seed hosts semis and final; the sub-district winner plus the six best remaining averages advance to Oct 31 district finals.";
+const D_FORMAT =
+  "NSAA assigns the 12 sub-districts geographically; teams are seeded within them by wildcard average and the #1 seed hosts every match (Oct 26–27). Sub-district winners plus the four best remaining averages advance to Oct 31 district finals.";
+
+/** One-line format summary per class (argument: number of teams). */
+const FORMAT: Record<VbClass, (n: number) => string> = {
+  A: (n) =>
+    `Un-modified serpentine of the ${n} seeds into 7 districts (Oct 26–28). The higher seed hosts every match, including the final; the 7 champions plus the best remaining average (wildcard) go to state.`,
+  B: (n) =>
+    `Un-modified serpentine of the ${n} seeds into 7 districts. Higher seed hosts; a neutral site (McCook, Lexington, Hastings, GI Northwest) is used if two schools are more than 300 miles apart before the final.`,
+  C1: () => C_FORMAT,
+  C2: () => C_FORMAT,
+  D1: () => D_FORMAT,
+  D2: () => D_FORMAT,
+};
 
 export default async function ClassPage({ params }: { params: Promise<{ cls: string }> }) {
   const { cls } = await params;
@@ -12,7 +30,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
   if (!SUPPORTED_CLASSES.includes(vbClass)) notFound();
   const [season, proj, sim] = await Promise.all([loadSeason(), getProjection(vbClass), getSimulation(vbClass)]);
   const n = sim.nSims;
-  const isC = vbClass.startsWith("C");
+  const hasDF = hasDistrictFinals(vbClass);
   const groupOf = new Map<string, { id: string; seed: number }>();
   for (const g of proj.groups) for (const t of g.teams) groupOf.set(t.name, { id: g.id, seed: t.seed });
 
@@ -41,9 +59,9 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                   <Th>Rec</Th>
                   <Th className="text-right">WC avg</Th>
                   <Th className="text-right">Rating</Th>
-                  <Th>{isC ? "Sub-dist" : "District"}</Th>
-                  <Th>Win {isC ? "sub-dist" : "district"}</Th>
-                  <Th>{isC ? "Dist. final" : "Wildcard"}</Th>
+                  <Th>{hasDF ? "Sub-dist" : "District"}</Th>
+                  <Th>Win {hasDF ? "sub-dist" : "district"}</Th>
+                  <Th>{hasDF ? "Dist. final" : "Wildcard"}</Th>
                   <Th>State</Th>
                   <Th>Title</Th>
                 </tr>
@@ -70,7 +88,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                         <Prob value={s.wonGroup / n} />
                       </Td>
                       <Td>
-                        <Prob value={(isC ? s.reachedDistrictFinal : s.wildcard) / n} />
+                        <Prob value={(hasDF ? s.reachedDistrictFinal : s.wildcard) / n} />
                       </Td>
                       <Td>
                         <Prob value={s.reachedState / n} />
@@ -88,11 +106,9 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
       </section>
 
       <section>
-        <h2 className="text-lg font-semibold mb-1">Projected {isC ? "sub-districts" : "districts"}</h2>
+        <h2 className="text-lg font-semibold mb-1">Projected {hasDF ? "sub-districts" : "districts"}</h2>
         <p className="text-sm text-muted mb-3">
-          {isC
-            ? "Regions serpentine into sub-districts by wildcard average. #1 seed hosts semis and final; the sub-district winner plus the six best remaining averages advance to Oct 31 district finals."
-            : "Un-modified serpentine of the 31 seeds into 7 districts. Higher seed hosts; a neutral site (McCook, Lexington, Hastings, GI Northwest) is used if two schools are more than 300 miles apart before the final."}
+          {FORMAT[vbClass](proj.overall.length)}
         </p>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {proj.brackets.map((b) => (

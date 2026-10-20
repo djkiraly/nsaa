@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui";
 import { getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
-import { DATES_2026 } from "@/lib/engine/brackets";
+import { DATES_2026, groupDates, hasDistrictFinals } from "@/lib/engine/brackets";
 
 export const dynamic = "force-dynamic";
 
@@ -20,13 +20,13 @@ export default async function Home() {
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {sims.map((sim) => {
           const n = sim.nSims;
           const top = Object.values(sim.teams)
             .sort((a, b) => b.champion - a.champion)
             .slice(0, 5);
-          const isC = sim.vbClass.startsWith("C");
+          const d = groupDates(sim.vbClass);
           return (
             <Card key={sim.vbClass}>
               <CardHeader className="flex items-center justify-between">
@@ -40,10 +40,10 @@ export default async function Home() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="text-xs text-muted">
-                  {isC
-                    ? `Sub-districts ${DATES_2026.classC.r1} – ${DATES_2026.classC.final} · District finals ${DATES_2026.districtFinal}`
-                    : `Districts ${DATES_2026.classB.r1}, ${DATES_2026.classB.r2}, ${DATES_2026.classB.final}`}{" "}
-                  · State {DATES_2026.state.quarter} – {DATES_2026.state.final}, Lincoln
+                  {hasDistrictFinals(sim.vbClass)
+                    ? `Sub-districts ${d.r1} – ${d.final} · District finals ${DATES_2026.districtFinal}`
+                    : `Districts ${d.r1}, ${d.r2}, ${d.final}`}{" "}
+                  · State {DATES_2026.state.quarter[sim.vbClass]} – {DATES_2026.state.final}, Lincoln
                 </div>
                 <div className="text-xs font-medium text-muted uppercase tracking-wide">Title odds ({n.toLocaleString()} sims)</div>
                 <ul className="space-y-1">
@@ -72,7 +72,8 @@ export default async function Home() {
           <ul className="list-disc pl-5 space-y-1">
             <li>Who is Gering most likely to play in the B-6 district final, and where?</li>
             <li>Which C2 sub-districts are stacked, and who gets the six district-final wildcards?</li>
-            <li>What does Mitchell need to do to host a sub-district match?</li>
+            <li>Who are the Class A title favorites, and who&apos;s in line for the wildcard?</li>
+            <li>Which D1 teams are likeliest to grab the four at-large district-final spots?</li>
             <li>Gering vs Columbus Lakeview at Gering — who wins?</li>
           </ul>
           <Link href="/chat" className="inline-block mt-2 text-accent hover:underline">

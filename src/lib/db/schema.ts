@@ -12,7 +12,7 @@ export const snapshots = pgTable(
     season: integer("season").notNull(),
     /** "A".."D2" or "ALL" for class-independent pages */
     vbClass: text("vb_class").notNull(),
-    /** export_csv | regions | region_standings | leaders | bracket | district_finals */
+    /** export_csv | regions | region_standings | subdistricts | leaders | bracket | district_finals */
     kind: text("kind").notNull(),
     /** e.g. distid for bracket pages */
     ref: text("ref"),

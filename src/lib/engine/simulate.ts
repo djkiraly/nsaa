@@ -6,25 +6,29 @@
  *   2. simulate remaining regular-season matches through the seeding cutoff
  *   3. compute wildcard records → form districts / sub-districts
  *   4. simulate those brackets (host rules applied)
- *   5. (C1/C2) recompute averages → 16-team district finals → simulate
- *      (B)     7 district winners + best remaining average = wildcard
+ *   5. (C1/C2/D1/D2) recompute averages → sub-district winners + best non-winners → 16-team district finals
+ *      (A/B)         7 district winners + best remaining average = wildcard
  *   6. recompute averages → 8-team state bracket → simulate
  *   7. tally everything
  */
 import type { Bracket, BracketMatch, Match, SeededTeam, TeamRecord, VbClass } from "./types";
 import { computeRecord, rankByWildcard } from "./wildcard";
 import {
-  formClassBDistricts,
+  formAssignedSubdistricts,
   formRegionSubdistricts,
+  formSerpentineDistricts,
   type Group,
   type RegionAssignment,
+  type SubdistrictAssignment,
 } from "./seeding";
 import {
-  buildClassBDistrictBracket,
+  buildDistrictBracket,
   buildDistrictFinals,
   buildStateBracket,
   buildSubdistrictBracket,
   DATES_2026,
+  groupDates,
+  hasDistrictFinals,
   nearestNeutral,
   CLASS_B_NEUTRAL_MILES,
 } from "./brackets";
@@ -46,6 +50,8 @@ export interface SeasonData {
   teams: Map<string, VbClass>;
   /** Region assignments (C1/C2). */
   regions: Partial<Record<VbClass, RegionAssignment[]>>;
+  /** NSAA-assigned sub-districts (D1/D2). */
+  subdistricts: Partial<Record<VbClass, SubdistrictAssignment[]>>;
   geo: Geo;
   ratings: Ratings;
 }
@@ -75,8 +81,8 @@ export interface TeamSimStats {
   group: Record<string, number>;
   groupSeed: Record<string, number>; // "C2-7#1"
   wonGroup: number;
-  reachedDistrictFinal: number; // C classes
-  wildcard: number; // B: qualified as the wildcard
+  reachedDistrictFinal: number; // C1/C2/D1/D2
+  wildcard: number; // A/B: qualified as the wildcard
   reachedState: number;
   stateSeed: Record<number, number>;
   wonStateQuarter: number;
@@ -189,17 +195,20 @@ function formGroupsAndBrackets(
   records: TeamRecord[],
   rng: () => number,
 ): Projection {
-  if (vbClass === "B") {
-    const { overall, groups } = formClassBDistricts(records, data.matches, rng);
-    return { overall, groups, brackets: groups.map((g) => buildClassBDistrictBracket(g, data.geo)) };
+  if (vbClass === "A" || vbClass === "B") {
+    const { overall, groups } = formSerpentineDistricts(vbClass, records, data.matches, rng);
+    return { overall, groups, brackets: groups.map((g) => buildDistrictBracket(g, data.geo)) };
   }
-  if (vbClass === "C1" || vbClass === "C2") {
-    const regions = data.regions[vbClass];
-    if (!regions) throw new Error(`No region assignments for ${vbClass}`);
-    const { overall, groups } = formRegionSubdistricts(vbClass, regions, records, data.matches, rng);
-    return { overall, groups, brackets: groups.map((g) => buildSubdistrictBracket(g, data.geo)) };
-  }
-  throw new Error(`Class ${vbClass} not supported yet`);
+  const formed =
+    vbClass === "C1" || vbClass === "C2"
+      ? formRegionSubdistricts(vbClass, required(data.regions[vbClass], `region assignments for ${vbClass}`), records, data.matches, rng)
+      : formAssignedSubdistricts(vbClass, required(data.subdistricts[vbClass], `sub-district assignments for ${vbClass}`), records, data.matches, rng);
+  return { ...formed, brackets: formed.groups.map((g) => buildSubdistrictBracket(g, data.geo)) };
+}
+
+function required<T>(v: T | undefined, what: string): T {
+  if (!v) throw new Error(`No ${what} — run \`npm run scrape\` or refresh the snapshots`);
+  return v;
 }
 
 export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
@@ -209,7 +218,8 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
   const canon = canonicalize(data.matches);
   const remaining = canon.filter((m) => !m.played && m.date <= cfg.cutoff);
   const base = baseRecords(data);
-  const isC = cfg.vbClass === "C1" || cfg.vbClass === "C2";
+  const withDistrictFinals = hasDistrictFinals(cfg.vbClass);
+  const groupFinalDate = groupDates(cfg.vbClass).final;
   const rowsByTeam = new Map<string, Match[]>();
   for (const m of data.matches) {
     if (!rowsByTeam.has(m.team)) rowsByTeam.set(m.team, []);
@@ -300,10 +310,12 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
     // 5. district finals / wildcard
     let stateField: string[];
     let stateRecordsDate: string;
-    if (isC) {
-      const after = recordsThrough(DATES_2026.classC.final);
+    if (withDistrictFinals) {
+      // Sub-district winners + the best non-winners fill 16 spots (C1/C2: 10 + 6, D1/D2: 12 + 4).
+      const after = recordsThrough(groupFinalDate);
       const winners = new Set(groupWinners.values());
-      const nonWinners = rankByWildcard(after.filter((r) => !winners.has(r.name)), data.matches, rng).slice(0, 6);
+      const atLarge = 16 - winners.size;
+      const nonWinners = rankByWildcard(after.filter((r) => !winners.has(r.name)), data.matches, rng).slice(0, atLarge);
       const field = rankByWildcard(after.filter((r) => winners.has(r.name) || nonWinners.some((x) => x.name === r.name)), data.matches, rng);
       const seeded: SeededTeam[] = field.map((r, i) => ({ ...r, seed: i + 1 }));
       for (const t of seeded) stats[t.name].reachedDistrictFinal++;
@@ -317,12 +329,12 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
       }
       stateRecordsDate = DATES_2026.districtFinal;
     } else {
-      const after = recordsThrough(DATES_2026.classB.final);
+      const after = recordsThrough(groupFinalDate);
       const winners = new Set(groupWinners.values());
       const wc = rankByWildcard(after.filter((r) => !winners.has(r.name)), data.matches, rng)[0];
       stats[wc.name].wildcard++;
       stateField = [...winners, wc.name];
-      stateRecordsDate = DATES_2026.classB.final;
+      stateRecordsDate = groupFinalDate;
     }
 
     // 6. state
@@ -395,7 +407,7 @@ function simulateBracket(
     let host = m.host;
     let site = m.site;
     if (!host && !site) {
-      // Class B district final: highest remaining seed hosts regardless of distance.
+      // Class A/B district final: highest remaining seed hosts (Class B: regardless of distance).
       host = seedOf(a) <= seedOf(b) ? a : b;
     } else if (br.vbClass === "B" && m.round < lastRound && host) {
       const d = distanceMiles(data.geo, a, b);

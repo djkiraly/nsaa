@@ -57,7 +57,7 @@ export interface TeamRecord {
   points: number;
   /** Wildcard average = points / matches played */
   avg: number;
-  /** Number of first-division opponents faced (tiebreaker criterion) */
+  /** Number of first-division opponents faced (tiebreaker criterion; Class A counts only Class A opponents) */
   firstDivOpponents: number;
   /** Opponents' aggregate W-L (tiebreaker criterion) */
   oppWins: number;

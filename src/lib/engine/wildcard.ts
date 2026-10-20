@@ -93,7 +93,8 @@ export function computeRecord(
     points += pts;
     if (m.won) wins++;
     else losses++;
-    if (div === 1) firstDiv++;
+    // Tiebreaker count. Class A only counts first-division teams "in their classification" (Manual, tiebreaker C).
+    if (div === 1 && (vbClass !== "A" || m.opponentClass === "A")) firstDiv++;
     oppW += ow;
     oppL += ol;
   }

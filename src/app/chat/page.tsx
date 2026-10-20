@@ -13,7 +13,8 @@ const SUGGESTIONS = [
   "Show me the projected Class B districts and who hosts each final.",
   "Who is Gering most likely to face in the district final, and what are their odds?",
   "Which C2 teams are most likely to take the six district-final wildcard spots?",
-  "Explain how C2-10 (the west sub-district) works and who's favored.",
+  "Who's favored to win Class A, and who gets the state wildcard?",
+  "How are the D1 sub-districts formed, and who's favored in D1-9?",
 ];
 
 export default function ChatPage() {
@@ -78,7 +79,7 @@ export default function ChatPage() {
         {messages.length === 0 && (
           <div className="text-sm text-muted space-y-3 max-w-2xl">
             <p>
-              Ask about Class B or C2 seedings, projected brackets, likely matchups, host sites, or simulation odds. The
+              Ask about any class (A, B, C1, C2, D1, D2): seedings, projected brackets, likely matchups, host sites, or simulation odds. The
               agent pulls from the current NSAA wildcard data and runs the rules from the 2026 manual.
             </p>
             <div className="flex flex-wrap gap-2">

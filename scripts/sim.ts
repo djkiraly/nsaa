@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildSeasonData } from "../src/lib/data/load";
 import { runSimulation } from "../src/lib/engine/simulate";
+import { hasDistrictFinals } from "../src/lib/engine/brackets";
 import type { VbClass } from "../src/lib/engine/types";
 
 const RAW = join(__dirname, "..", "data", "raw");
@@ -11,6 +12,7 @@ const data = buildSeasonData({
   seasonYear: 2026,
   exports: Object.fromEntries(CLASSES.map((c) => [c, read(`vb_${c}.csv`)])),
   regionHtml: { C1: read("regions_C1.html"), C2: read("regions_C2.html") },
+  subdistrictHtml: read("subdistricts.html"),
 });
 const cls = (process.argv[2] ?? "B") as VbClass;
 const n = Number(process.argv[3] ?? 2000);
@@ -23,8 +25,8 @@ const rows = Object.values(res.teams)
     team: t.name,
     rating: (data.ratings.rating.get(t.name) ?? 0).toFixed(2),
     "P(win grp)": (t.wonGroup / n).toFixed(2),
-    "P(DF)": cls.startsWith("C") ? (t.reachedDistrictFinal / n).toFixed(2) : "-",
-    "P(WC)": cls === "B" ? (t.wildcard / n).toFixed(2) : "-",
+    "P(DF)": hasDistrictFinals(cls) ? (t.reachedDistrictFinal / n).toFixed(2) : "-",
+    "P(WC)": hasDistrictFinals(cls) ? "-" : (t.wildcard / n).toFixed(2),
     "P(state)": (t.reachedState / n).toFixed(2),
     "P(semi)": (t.wonStateQuarter / n).toFixed(2),
     "P(title)": (t.champion / n).toFixed(3),
