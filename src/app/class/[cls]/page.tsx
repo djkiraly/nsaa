@@ -5,7 +5,12 @@ import type { VbClass } from "@/lib/engine/types";
 import type { Bracket } from "@/lib/engine/types";
 import { hasDistrictFinals } from "@/lib/engine/brackets";
 
-export const dynamic = "force-dynamic";
+// Static per class, regenerated when /api/refresh stores new NSAA data (see app/page.tsx).
+export const revalidate = 3600;
+
+export function generateStaticParams() {
+  return SUPPORTED_CLASSES.map((cls) => ({ cls }));
+}
 
 const C_FORMAT =
   "Regions serpentine into sub-districts by wildcard average. #1 seed hosts semis and final; the sub-district winner plus the six best remaining averages advance to Oct 31 district finals.";

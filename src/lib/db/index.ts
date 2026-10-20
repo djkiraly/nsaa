@@ -10,7 +10,10 @@ import * as schema from "./schema";
 export const hasDb = !!process.env.DATABASE_URL;
 
 const g = globalThis as unknown as { __nsaaPool?: Pool };
-const pool = hasDb ? (g.__nsaaPool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 5 })) : null;
+// allowExitOnIdle: idle connections don't keep short-lived processes (next build workers, scripts) alive.
+const pool = hasDb
+  ? (g.__nsaaPool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 5, allowExitOnIdle: true }))
+  : null;
 
 export const db = pool ? drizzle(pool, { schema }) : null;
 

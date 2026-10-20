@@ -3,7 +3,9 @@ import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui
 import { getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
 import { DATES_2026, groupDates, hasDistrictFinals } from "@/lib/engine/brackets";
 
-export const dynamic = "force-dynamic";
+// Static, regenerated when /api/refresh stores new NSAA data (revalidatePath) — hourly at most anyway. Static pages
+// are prefetched in full by <Link>, so menu clicks are instant instead of waiting on a server render.
+export const revalidate = 3600;
 
 export default async function Home() {
   const season = await loadSeason();

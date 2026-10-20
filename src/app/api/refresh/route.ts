@@ -1,10 +1,15 @@
 import { NextRequest } from "next/server";
-import { refreshSnapshots, warmSimulations } from "@/lib/data/season";
+import { revalidatePath } from "next/cache";
+import { refreshSnapshots, SUPPORTED_CLASSES, warmSimulations } from "@/lib/data/season";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/** Scrape NSAA and store a fresh snapshot. Protect with CRON_SECRET (Vercel cron sends it as a Bearer token). */
+/**
+ * Scrape NSAA, store a fresh snapshot, re-run the simulations and invalidate the static pages. Protected by
+ * CRON_SECRET (Bearer token). `warm` lists the pages to request next so they regenerate before visitors arrive —
+ * scripts/refresh.mjs does that.
+ */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
@@ -13,5 +18,7 @@ export async function GET(req: NextRequest) {
   }
   const { stored } = await refreshSnapshots();
   await warmSimulations();
-  return Response.json({ ok: true, stored, at: new Date().toISOString() });
+  revalidatePath("/", "layout");
+  const warm = ["/", ...SUPPORTED_CLASSES.map((c) => `/class/${c}`)];
+  return Response.json({ ok: true, stored, warm, at: new Date().toISOString() });
 }

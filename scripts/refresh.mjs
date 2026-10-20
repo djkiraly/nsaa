@@ -28,3 +28,11 @@ for (let attempt = 1; ; attempt++) {
 const body = await res.text();
 console.log(`${res.status} ${body.slice(0, 500)}`);
 if (!res.ok) process.exit(1);
+
+// The pages are static and were just invalidated; request each so it regenerates now rather than on a visitor's click.
+for (const path of JSON.parse(body).warm ?? []) {
+  const t0 = Date.now();
+  const page = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(60_000) });
+  await page.arrayBuffer();
+  console.log(`warmed ${path} → ${page.status} in ${Date.now() - t0} ms`);
+}

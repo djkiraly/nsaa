@@ -5,8 +5,8 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { and, desc, eq } from "drizzle-orm";
-import { db, hasDb, schema } from "../db";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { db, schema } from "../db";
 import { CLASS_ORDER, type VbClass } from "../engine/types";
 import { buildSeasonData } from "./load";
 import { NSAA_URLS } from "./load";
@@ -32,60 +32,59 @@ export interface LoadedSeason {
 
 let cache: { key: string; season: LoadedSeason; sims: Map<string, SimResult> } | null = null;
 
-async function latestSnapshot(vbClass: string, kind: string) {
-  if (!db) return null;
-  const rows = await db
-    .select()
-    .from(schema.snapshots)
-    .where(and(eq(schema.snapshots.season, SEASON), eq(schema.snapshots.vbClass, vbClass), eq(schema.snapshots.kind, kind)))
-    .orderBy(desc(schema.snapshots.fetchedAt))
-    .limit(1);
-  return rows[0] ?? null;
+type Db = NonNullable<typeof db>;
+
+/**
+ * Newest snapshot of every kind the engine reads — ids and times only, no bodies. One cheap query that tells
+ * loadSeason whether anything changed, so cache hits don't pull ~700 KB of stored pages.
+ */
+export async function latestSnapshotIds(d: Db) {
+  const s = schema.snapshots;
+  return d
+    .selectDistinctOn([s.vbClass, s.kind], { id: s.id, vbClass: s.vbClass, kind: s.kind, fetchedAt: s.fetchedAt })
+    .from(s)
+    .where(and(eq(s.season, SEASON), inArray(s.kind, ["export_csv", "regions", "subdistricts"])))
+    .orderBy(s.vbClass, s.kind, desc(s.fetchedAt));
+}
+
+export async function loadFromDb(d: Db): Promise<LoadedSeason | null> {
+  const latest = await latestSnapshotIds(d);
+  const exportsLatest = latest.filter((r) => r.kind === "export_csv");
+  if (exportsLatest.length === 0) return null;
+  const key = `db:${Math.max(...latest.map((r) => r.id))}`;
+  if (cache?.key === key) return cache.season;
+
+  const s = schema.snapshots;
+  const rows = await d
+    .select({ vbClass: s.vbClass, kind: s.kind, body: s.body })
+    .from(s)
+    .where(inArray(s.id, latest.map((r) => r.id)));
+  const body = (vbClass: string, kind: string) => rows.find((r) => r.vbClass === vbClass && r.kind === kind)?.body;
+  const exports: Partial<Record<VbClass, string>> = {};
+  const regionHtml: Partial<Record<VbClass, string>> = {};
+  for (const c of CLASS_ORDER) exports[c] = body(c, "export_csv");
+  // Assignments are fixed for the season; use the bundled copies until a refresh has stored them.
+  for (const c of ["C1", "C2"] as const) regionHtml[c] = body(c, "regions") ?? readFixture(`regions_${c}.html`);
+  const subdistrictHtml = body("ALL", "subdistricts") ?? readFixture("subdistricts.html");
+
+  const season: LoadedSeason = {
+    data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml }),
+    snapshotKey: key,
+    fetchedAt: new Date(Math.max(...exportsLatest.map((r) => r.fetchedAt.getTime()))),
+    source: "db",
+  };
+  cache = { key, season, sims: new Map() };
+  return season;
 }
 
 export async function loadSeason(): Promise<LoadedSeason> {
-  if (hasDb) {
-    const exports: Partial<Record<VbClass, string>> = {};
-    const regionHtml: Partial<Record<VbClass, string>> = {};
-    let subdistrictHtml: string | undefined;
-    let newest = 0;
-    let newestId = 0;
-    let dbOk = true;
+  if (db) {
     try {
-      for (const c of CLASS_ORDER) {
-        const s = await latestSnapshot(c, "export_csv");
-        if (s) {
-          exports[c] = s.body;
-          if (s.fetchedAt.getTime() > newest) {
-            newest = s.fetchedAt.getTime();
-            newestId = s.id;
-          }
-        }
-        if (c === "C1" || c === "C2") {
-          const r = await latestSnapshot(c, "regions");
-          if (r) regionHtml[c] = r.body;
-        }
-      }
-      subdistrictHtml = (await latestSnapshot("ALL", "subdistricts"))?.body;
+      const season = await loadFromDb(db);
+      if (season) return season;
     } catch (e) {
-      // A bad DATABASE_URL or a Neon outage shouldn't take the site down — serve the fixtures instead.
-      dbOk = false;
+      // A bad DATABASE_URL or a database outage shouldn't take the site down — serve the fixtures instead.
       console.warn(`[season] snapshot DB unavailable, falling back to fixtures: ${e instanceof Error ? (e.cause ?? e.message) : e}`);
-    }
-    if (dbOk && Object.keys(exports).length > 0) {
-      const key = `db:${newestId}`;
-      if (cache?.key === key) return cache.season;
-      // Assignments are fixed for the season; use the bundled copies until a refresh has stored them.
-      for (const c of ["C1", "C2"] as const) regionHtml[c] ??= readFixture(`regions_${c}.html`);
-      subdistrictHtml ??= readFixture("subdistricts.html");
-      const season: LoadedSeason = {
-        data: buildSeasonData({ seasonYear: SEASON, exports, regionHtml, subdistrictHtml }),
-        snapshotKey: key,
-        fetchedAt: new Date(newest),
-        source: "db",
-      };
-      cache = { key, season, sims: new Map() };
-      return season;
     }
   }
   // Fixtures fallback
