@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Card, CardContent, CardHeader, CardTitle, Prob, ProbStat, Table, Td, Th } from "@/components/ui";
 import { getProjection, getProjectionCheck, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
@@ -63,7 +64,13 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
             </a>
           </nav>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={`/class/${vbClass}/simulate`}
+            className="rounded-md bg-foreground text-background px-3 py-1.5 text-sm font-medium hover:opacity-90"
+          >
+            What-if simulator →
+          </Link>
           <Badge variant={proj.official ? "good" : "outline"}>
             {proj.official ? "Official NSAA pairings" : "Projected · official pairings Oct 22"}
           </Badge>
@@ -257,7 +264,7 @@ function BracketCard({ bracket, winProb }: { bracket: Bracket; winProb: (t: stri
               </div>
               {m.result ? (
                 <div className="font-medium text-good">
-                  ✓ {m.result.winner} won {m.result.setsW}-{m.result.setsL}
+                  ✓ {m.result.winner} won{m.result.setsW !== undefined && ` ${m.result.setsW}-${m.result.setsL}`}
                 </div>
               ) : null}
               <div className="text-muted">

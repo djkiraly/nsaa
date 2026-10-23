@@ -16,7 +16,7 @@ Stack: Next.js 16 · TypeScript · Tailwind 4 · Drizzle ORM + Postgres (optiona
 | `src/lib/engine/simulate.ts` | Monte Carlo: remaining regular season → seeding → brackets → district finals / wildcard → state. |
 | `src/lib/data/*` | NSAA CSV/HTML parsers, loader, scraper, snapshot storage. |
 | `src/lib/agent/*` | Claude tool-use agent: standings, brackets, simulations, team outlook, head-to-head, live NSAA pages, rules. |
-| `src/app` | Overview, per-class standings + projected brackets, chat UI, API routes. |
+| `src/app` | Overview, per-class standings + official/projected brackets, what-if simulator, chat UI, API routes. |
 
 ## Quick start
 
@@ -118,17 +118,35 @@ Tools available to the model: `get_standings`, `get_projected_brackets`, `simula
 
 The hourly refresh also stores NSAA's 58 bracket pages (`vbbrackets.php?distid=N`) and the district finals page
 (`vbfinals.php`); `src/lib/data/parse-brackets.ts` reads them. Both bracket layouts NSAA has used are handled
-(classic tables through 2025, Bootstrap cards as on the 2026 softball pages) — real samples of every state are in
-`tests/fixtures/nsaa/`.
+(classic tables through 2025, Bootstrap cards in 2026 softball and volleyball) — real samples of every state are in
+`tests/fixtures/nsaa/`, and `data/raw/brackets/` holds all 58 official 2026 pages as posted Oct 22.
 
 - **Pairings (Oct 22).** Once every bracket page for a class is posted, NSAA's groups and seeds replace the
-  projection, and each match shows NSAA's date, time and venue (the venue decides home court). A class keeps
-  projecting until all of its pages are up. The class page reports how the Oct 20 projection compared.
-- **Results (from Oct 26).** A winner reappears on the page with the score of the match it won; those results are
-  fixed in every simulation run (losers are out), and they count toward the averages that seed the district finals,
-  the A/B wildcard and state.
+  projection, and each match shows NSAA's date, time and venue (the venue decides home court; "Gering High School",
+  "EMF Public Schools" and a few gym/town names in `official.ts` map to the hosting team). A class keeps projecting
+  until all of its pages are up. The class page reports how the Oct 20 projection compared — in 2026 it matched
+  NSAA exactly: all 284 teams in the right group with the right seed. Tests check that NSAA's bracket tree is the one
+  the simulation plays (`officialStructureIssues`).
+- **Results (from Oct 26).** On the 2026 cards each game says which slot its winner moves to (`data-feeds`), so a
+  winner is whichever of the game's teams fills that slot, however NSAA prints it; the score is read when shown. On
+  classic tables a winner reappears with the score of the match it won. Results are fixed in every simulation run
+  (losers are out), and they count toward the averages that seed the district finals, the A/B wildcard and state.
 - **District finals (C1/C2/D1/D2).** When all eight pairings for a class are posted, the simulation plays NSAA's
   pairings and hosts instead of computing them, with any winners fixed.
+
+## What-if simulator
+
+`/class/<class>/simulate` shows the official brackets with each team's chance of winning every match. Click a team to
+make it win that match (it then appears in the next round), then run 2,000 or 5,000 simulations: picks are fixed like
+posted results, everything else is played out, and the outlook table shows the change from the no-picks baseline
+(changes within ±2 standard errors are hidden as noise). Picks are in the URL (`?p=B-5-M3~Gretna%20East`), so a
+scenario can be shared. Posted results are locked; a pick that a later result or an earlier pick makes impossible is
+dropped (`src/lib/engine/picks.ts`).
+
+`POST /api/sim` `{ class, n: 2000 | 5000, picks: { matchId: winner } }` returns per-team odds and per-match winners;
+unknown matches or teams are dropped. Each run blocks the server for ~1–3 s; the last 64 scenarios per snapshot are
+cached. The chat agent's `simulate_postseason` takes the same picks (match ids come from `get_projected_brackets`;
+state games are `<class>-ST-Q1…Q4`, `S1`, `S2`, `F`).
 
 ## Usage analytics (private)
 

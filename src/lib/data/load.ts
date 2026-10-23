@@ -53,6 +53,7 @@ function buildOfficial(raw: RawSeasonFiles, teams: Map<string, VbClass>): Partia
           slots: [g.top, g.bottom].map((e) => (e ? { name: name(e.name), seeded: e.seed !== undefined } : null)),
           winner: g.winner ? name(g.winner) : undefined,
           score: g.score,
+          feeds: typeof g.feeds === "object" ? g.feeds.game : undefined,
         })),
       };
     }

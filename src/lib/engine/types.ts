@@ -68,12 +68,12 @@ export interface SeededTeam extends TeamRecord {
   seed: number;
 }
 
-/** A result NSAA has posted. Sets are the winner's and the loser's. */
+/** A result NSAA has posted. Sets are the winner's and the loser's (absent if NSAA showed only who advanced). */
 export interface MatchResult {
   winner: string;
   loser: string;
-  setsW: number;
-  setsL: number;
+  setsW?: number;
+  setsL?: number;
 }
 
 /** A single bracket match slot. */
@@ -107,6 +107,8 @@ export interface OfficialGame {
   winner?: string;
   /** Winner's sets – loser's sets */
   score?: [number, number];
+  /** Game number the winner moves on to (card layout); absent for the final. */
+  feeds?: number;
 }
 
 /** An official district / sub-district from NSAA's bracket page. */

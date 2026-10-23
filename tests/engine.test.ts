@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildSeasonData } from "../src/lib/data/load";
+import { bracketPages, buildSeasonData } from "../src/lib/data/load";
 import {
   parseWildcardLeaders,
   parseRegionAssignments,
-  parseRegionStandingsSubdistricts,
   parseSubdistrictAssignments,
 } from "../src/lib/data/parse-html";
 import { computeRecord, matchPoints, divisionFor, classBonus } from "../src/lib/engine/wildcard";
 import { serpentine } from "../src/lib/engine/seeding";
 import { project, runSimulation } from "../src/lib/engine/simulate";
+import { compareProjection } from "../src/lib/engine/official";
 import { matchWinProb } from "../src/lib/engine/ratings";
 import type { VbClass } from "../src/lib/engine/types";
 
@@ -18,12 +18,13 @@ const RAW = join(__dirname, "..", "data", "raw");
 const read = (f: string) => readFileSync(join(RAW, f), "utf8");
 const CLASSES: VbClass[] = ["A", "B", "C1", "C2", "D1", "D2"];
 
-const data = buildSeasonData({
+const raw = {
   seasonYear: 2026,
   exports: Object.fromEntries(CLASSES.map((c) => [c, read(`vb_${c}.csv`)])),
   regionHtml: { C1: read("regions_C1.html"), C2: read("regions_C2.html") },
   subdistrictHtml: read("subdistricts.html"),
-});
+};
+const data = buildSeasonData(raw);
 const classTeams = (c: VbClass) => [...data.teams].filter(([, k]) => k === c).map(([n]) => n);
 
 describe("wildcard formula", () => {
@@ -60,12 +61,12 @@ describe("reproduces NSAA published averages", () => {
       expect(mismatches, mismatches.join("\n")).toEqual([]);
     });
   }
-  it("Gering = 26-5, 44.4516 through the Oct 19 snapshot", () => {
+  it("Gering = 27-5, 44.6250 at the Oct 20 cutoff (NSAA's B-5 bracket page: 44.6250 pts)", () => {
     const g = computeRecord("Gering", "B", data.matches);
-    expect(g.wins).toBe(26);
+    expect(g.wins).toBe(27);
     expect(g.losses).toBe(5);
-    expect(g.avg).toBeCloseTo(44.4516, 4);
-    expect(g.points).toBe(1378);
+    expect(g.avg).toBeCloseTo(44.625, 4);
+    expect(g.points).toBe(1428);
   });
 });
 
@@ -82,17 +83,17 @@ describe("seeding", () => {
     expect(regions.map((r) => r.teams.length)).toEqual([17, 16, 17, 5]);
     expect(regions[3].teams).toContain("Mitchell");
   });
-  for (const c of ["C1", "C2"] as const) {
-    it(`${c} sub-districts match NSAA's live standings page (same snapshot)`, () => {
-      const nsaa = parseRegionStandingsSubdistricts(read(`standings_${c}.html`));
-      expect(Object.keys(nsaa).sort()).toEqual(
-        Array.from({ length: 10 }, (_, i) => `${c}-${i + 1}`).sort(),
-      );
-      const proj = project(data, c, "2026-10-31");
-      const ours = Object.fromEntries(proj.groups.map((g) => [g.id, g.teams.map((t) => t.name)]));
-      expect(ours).toEqual(nsaa);
-    });
-  }
+  it("the rule-based projection reproduces NSAA's official 2026 groups and seeds in every class", () => {
+    const bracketHtml = Object.fromEntries(bracketPages().map(([id]) => [id, read(`brackets/${id}.html`)]));
+    const withOfficial = buildSeasonData({ ...raw, bracketHtml });
+    for (const c of CLASSES) {
+      const official = project(withOfficial, c, "2026-10-20");
+      expect(official.official).toBe(true);
+      const check = compareProjection(project(data, c, "2026-10-20").groups, official.groups);
+      expect(check.misses, `${c}: ${JSON.stringify(check.misses)}`).toEqual([]);
+      expect(check.total).toBe(classTeams(c).length);
+    }
+  });
   it("Class A: 34 teams serpentine into six 5-team districts and a 4-team A-7; higher seed always hosts", () => {
     const proj = project(data, "A", "2026-10-31");
     expect(proj.overall).toHaveLength(34);
@@ -117,11 +118,11 @@ describe("seeding", () => {
       }
     }
   });
-  it("Class B districts: Norris #1 in B-1, Gering in B-6", () => {
+  it("Class B districts: Norris #1 in B-1, Gering #1 in B-5", () => {
     const proj = project(data, "B", "2026-10-31");
     expect(proj.overall[0].name).toBe("Norris");
     const gering = proj.groups.find((g) => g.teams.some((t) => t.name === "Gering"))!;
-    expect(gering.id).toBe("B-6");
+    expect(gering.id).toBe("B-5");
     expect(gering.teams[0].name).toBe("Gering");
   });
 });

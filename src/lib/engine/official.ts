@@ -11,6 +11,7 @@ import type {
   BracketMatch,
   MatchResult,
   OfficialDistrictFinal,
+  OfficialGame,
   OfficialGroup,
   TeamRecord,
   VbClass,
@@ -44,52 +45,114 @@ const words = (s: string) =>
   s
     .toLowerCase()
     .replace(/\([^)]*\)/g, "")
+    .replace(/['"’`]/g, "") // O'Neill, ONeill and NSAA's O"Neill alike
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .split(" ")
     .filter(Boolean);
 
+/** Words that name the building rather than the school: "Gering High School", "Elba Public Schools", "… HS". */
+const VENUE_WORDS = new Set([
+  "high", "middle", "school", "schools", "hs", "public", "community", "consolidated", "activity", "activities",
+  "center", "sports", "complex", "gym", "gymnasium", "ne",
+]);
+
+/** 2026 venues named after a gym or a town rather than the school that plays there. */
+const VENUE_TEAMS: Record<string, string> = {
+  "bison dome": "Central City",
+  elwood: "Hi-Line",
+  "rock county": "North Central",
+  "cedar rapids": "Riverside",
+  sargent: "Twin Loup",
+};
+
 /**
- * Which of two teams a listed venue belongs to ("@ Duchesne" → "Omaha Duchesne Academy"), or undefined for a
- * neutral site. Exact name first, then all of one name's words appearing in the other.
+ * Which of two teams a listed venue belongs to ("@ Duchesne" → "Omaha Duchesne Academy", "at Gering High School" →
+ * "Gering", "EMF Public Schools, Friend, NE" → "Exeter-Milligan-Friend"), or undefined for a neutral site. Known
+ * aliases and exact names first, then all of one name's words appearing in the other or the venue being the school's
+ * initials — ignoring building words and a trailing town.
  */
 export function siteHost(site: string | undefined, a: string, b: string): string | undefined {
   if (!site) return undefined;
-  const s = words(site);
+  const s = words(site.replace(/,.*$/, "")).filter((w) => !VENUE_WORDS.has(w));
+  const alias = VENUE_TEAMS[s.join(" ")];
+  if (alias === a || alias === b) return alias;
   const exact = [a, b].find((t) => words(t).join(" ") === s.join(" "));
   if (exact) return exact;
   const contains = (x: string[], y: string[]) => x.length > 0 && x.every((w) => y.includes(w));
-  const hits = [a, b].filter((t) => contains(s, words(t)) || contains(words(t), s));
+  const initials = (t: string) => words(t.replace(/-/g, " ")).map((w) => w[0]).join("");
+  const hits = [a, b].filter(
+    (t) => contains(s, words(t)) || contains(words(t), s) || (s.length === 1 && s[0].length > 1 && s[0] === initials(t)),
+  );
   return hits.length === 1 ? hits[0] : undefined;
+}
+
+/**
+ * NSAA game number → the match of our bracket it is. A team's seeded (first) appearance pins a game to the match
+ * where our bracket lists it by name; a game between advancing winners is the match fed by the same matches that
+ * NSAA's page says feed it (card layout), otherwise the next open match in round order.
+ */
+function mapGames(matches: BracketMatch[], og: OfficialGroup): Map<number, BracketMatch> {
+  const at = new Map<number, BracketMatch>();
+  const used = new Set<string>();
+  const take = (g: OfficialGame, m: BracketMatch | undefined) => {
+    if (!m) return false;
+    at.set(g.num, m);
+    used.add(m.id);
+    return true;
+  };
+  const games = [...og.games].sort((x, y) => x.num - y.num);
+  for (const g of games) {
+    const seeded = g.slots.filter((s) => s?.seeded).map((s) => s!.name);
+    if (seeded.length) take(g, matches.find((x) => !used.has(x.id) && seeded.every((n) => x.top === n || x.bottom === n)));
+  }
+  for (let progress = true; progress; ) {
+    progress = false;
+    for (const g of games.filter((x) => !at.has(x.num))) {
+      const feeders = games.filter((x) => x.feeds === g.num).map((x) => at.get(x.num)?.id);
+      if (!feeders.length || feeders.some((id) => !id)) continue;
+      const fedBy = (x: BracketMatch) => feeders.every((id) => x.top === `W:${id}` || x.bottom === `W:${id}`);
+      progress = take(g, matches.find((x) => !used.has(x.id) && fedBy(x))) || progress;
+    }
+  }
+  const open = matches.filter((m) => !used.has(m.id)).sort((x, y) => x.round - y.round);
+  games.filter((g) => !at.has(g.num)).forEach((g) => take(g, open.find((m) => !used.has(m.id))));
+  return at;
 }
 
 /** Fill a bracket's matches with NSAA's dates, times, venues and results. */
 export function applyOfficial(br: Bracket, og: OfficialGroup): Bracket {
   const matches: BracketMatch[] = br.matches.map((m) => ({ ...m }));
-  const used = new Set<string>();
-  const assign = (m: BracketMatch, g: OfficialGroup["games"][number]) => {
-    used.add(m.id);
+  for (const [num, m] of mapGames(matches, og)) {
+    const g = og.games.find((x) => x.num === num)!;
     if (g.date) m.date = g.date;
     m.time = g.time;
     m.officialSite = g.site ?? og.defaultSite;
     const names = g.slots.map((s) => s?.name).filter((n): n is string => !!n);
     const loser = names.find((n) => n !== g.winner);
-    if (g.winner && g.score && loser) m.result = { winner: g.winner, loser, setsW: g.score[0], setsL: g.score[1] };
-  };
-  const later: OfficialGroup["games"] = [];
-  for (const g of [...og.games].sort((x, y) => x.num - y.num)) {
-    // A team's seeded (first) appearance pins the game to the match where our bracket lists it by name.
-    const seeded = g.slots.filter((s) => s?.seeded).map((s) => s!.name);
-    const m = seeded.length
-      ? matches.find((x) => !used.has(x.id) && seeded.every((n) => x.top === n || x.bottom === n))
-      : undefined;
-    if (m) assign(m, g);
-    else later.push(g);
+    if (g.winner && loser) m.result = { winner: g.winner, loser, setsW: g.score?.[0], setsL: g.score?.[1] };
   }
-  // Games between advancing winners (finals) follow in round order.
-  const open = matches.filter((m) => !used.has(m.id)).sort((x, y) => x.round - y.round);
-  later.forEach((g, i) => open[i] && assign(open[i], g));
   return { ...br, matches };
+}
+
+/**
+ * Where NSAA's bracket differs from the one our builder made for the same seeds: a game NSAA has that we can't
+ * place, or a winner NSAA sends somewhere else. Empty when the simulation plays exactly NSAA's bracket.
+ */
+export function officialStructureIssues(br: Bracket, og: OfficialGroup): string[] {
+  const at = mapGames(br.matches, og);
+  const issues: string[] = [];
+  for (const g of og.games) {
+    const m = at.get(g.num);
+    if (!m) issues.push(`${og.id} game ${g.num}: no matching game in our bracket`);
+    else if (g.feeds !== undefined) {
+      const next = at.get(g.feeds);
+      if (next && next.top !== `W:${m.id}` && next.bottom !== `W:${m.id}`)
+        issues.push(`${og.id} game ${g.num}: NSAA sends the winner to game ${g.feeds}, our bracket doesn't`);
+    }
+  }
+  if (og.games.length !== br.matches.length) issues.push(`${og.id}: NSAA lists ${og.games.length} games, ours ${br.matches.length}`);
+  return issues;
 }
 
 /** District finals as a bracket, once NSAA has posted all eight pairings (null before). */

@@ -4,12 +4,16 @@
  *  - district finals  nsaaforms/officials/vbfinals.php
  *
  * NSAA has used two bracket layouts: the classic nested tables (volleyball through 2025) and Bootstrap cards
- * (softball 2026 — the 2026 volleyball stub pages load the same assets). Both read into the same shape:
- *  - a game box ("Match 3 / 10/30/2025 / 6:00 PM CT / @ Waverly") with a top and a bottom team slot;
- *  - a team's first appearance is seeded: "#4 Omaha Duchesne Academy 39.1111 (9-25)" (seed, average, record);
- *  - a winner reappears unseeded in its next game with that game's score: "Omaha Duchesne Academy (3-0)";
+ * (softball and volleyball 2026). Both read into the same shape:
+ *  - a game box ("Match 3 / 10/30/2025 / 6:00 PM CT / @ Waverly", 2026: "at Waverly High School") with a top and a
+ *    bottom team slot;
+ *  - a team's first appearance is seeded: "#4 Omaha Duchesne Academy 39.1111 (9-25)" (seed, average, record;
+ *    2026 volleyball: "#4 Alliance (5-26) / 36.6774 pts");
+ *  - a winner reappears in its next game with that game's score: "Omaha Duchesne Academy (3-0)";
  *  - the champion sits alone after the final.
- * Results are inferred from those reappearances. Samples of every state live in tests/fixtures/nsaa.
+ * Cards say where each game's winner goes (data-feeds="3:bot", "w4" = champion), so a winner is whichever of the
+ * game's teams fills that slot, however NSAA prints it. Tables have no such link; there results are inferred from the
+ * reappearances. Samples of every state live in tests/fixtures/nsaa.
  */
 import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
@@ -33,6 +37,8 @@ export interface BracketGame {
   bottom?: BracketEntry;
   winner?: string;
   score?: [number, number];
+  /** Card layout: the slot this game's winner moves to — another game's top/bottom, or "champion". */
+  feeds?: { game: number; slot: "top" | "bottom" } | "champion";
 }
 
 export interface ParsedBracket {
@@ -47,17 +53,20 @@ export interface ParsedBracket {
 const clean = (s: string) => s.replace(/ /g, " ").replace(/\s+/g, " ").trim();
 
 export function parseEntry(raw: string): BracketEntry | undefined {
-  const t = clean(raw);
+  let t = clean(raw);
   if (!t || /^winner$/i.test(t)) return undefined;
+  // 2026 volleyball prints the average last, as points: "#4 Alliance (5-26) 36.6774 pts".
+  const pts = t.match(/\s*(\d+\.\d+)\s*pts$/i);
+  if (pts) t = t.slice(0, pts.index).trim();
   const m = t.match(/^(?:#(\d+)\s+)?(.+?)(?:\s+(\d+\.\d+))?(?:\s*\((\d+)-(\d+)\))?$/);
   if (!m) return { name: t };
   const [, seed, name, avg, a, b] = m;
   const e: BracketEntry = { name: name.trim() };
-  if (seed) {
-    e.seed = Number(seed);
-    if (avg) e.avg = Number(avg);
-    if (a) [e.wins, e.losses] = [Number(a), Number(b)];
-  } else if (a) e.score = [Number(a), Number(b)];
+  if (seed) e.seed = Number(seed);
+  if (pts || avg) e.avg = Number(pts?.[1] ?? avg);
+  // Next to a seed or an average the parentheses are the season record; on a bare name, the score just won.
+  if (a && (seed || e.avg !== undefined)) [e.wins, e.losses] = [Number(a), Number(b)];
+  else if (a) e.score = [Number(a), Number(b)];
   return e;
 }
 
@@ -70,8 +79,8 @@ function parseHeader(lines: string[]): Omit<BracketGame, "top" | "bottom"> | und
     const d = line.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (d) g.date = `${d[3]}-${d[1].padStart(2, "0")}-${d[2].padStart(2, "0")}`;
     else if (/^\d{1,2}:\d{2}\s*[AP]M/i.test(line)) g.time = line;
-    else if (line.startsWith("@")) {
-      const site = clean(line.slice(1));
+    else if (/^(@|at\s)/i.test(line)) {
+      const site = clean(line.replace(/^(@|at\s)/i, ""));
       if (!/^(TBA|TBD)$/i.test(site)) g.site = site; // not decided yet → the rule-based host applies
     }
   }
@@ -113,28 +122,63 @@ function parseTableLayout($: CheerioAPI): { games: BracketGame[]; champion?: Bra
   return { games, champion };
 }
 
-/** Card layout: `.card` with a `.card-header` and `[data-team=top|bot]` slots; the champion box id ends in "-w<n>". */
+/** "3:bot" → game 3's bottom slot; "w4" (optionally "w8 ~9": if-necessary game) → the champion box. */
+function parseFeeds(attr: string | undefined): BracketGame["feeds"] {
+  const to = attr?.trim().split(/\s+/)[0];
+  if (!to) return undefined;
+  if (/^w\d+$/.test(to)) return "champion";
+  const m = to.match(/^(\d+):(top|bot|bottom)$/);
+  return m ? { game: Number(m[1]), slot: m[2] === "top" ? "top" : "bottom" } : undefined;
+}
+
+/**
+ * Card layout: `.card` with a `.card-header` and `[data-team=top|bot]` slots; the champion box id ends in "-w<n>".
+ * Lines inside a slot are joined with a space ("#4 Alliance (5-26)<br>36.6774 pts").
+ */
 function parseCardLayout($: CheerioAPI): { games: BracketGame[]; champion?: BracketEntry } {
   const byNum = new Map<number, BracketGame>();
   let champion: BracketEntry | undefined;
+  const slot = (el: ReturnType<CheerioAPI>) => parseEntry(lines($, el[0] ?? el).join(" "));
   $(".card").each((_, card) => {
     if ($(card).closest('[aria-hidden="true"]').length) return; // layout spacer clones
     const head = $(card).children(".card-header").first();
     const header = head.length ? parseHeader(lines($, head[0])) : undefined;
     if (!header || byNum.has(header.num)) return;
+    const top = $(card).find('[data-team="top"]').first();
+    const bottom = $(card).find('[data-team="bot"], [data-team="bottom"]').first();
     byNum.set(header.num, {
       ...header,
-      top: parseEntry($(card).find('[data-team="top"]').first().text()),
-      bottom: parseEntry($(card).find('[data-team="bot"], [data-team="bottom"]').first().text()),
+      top: top.length ? slot(top) : undefined,
+      bottom: bottom.length ? slot(bottom) : undefined,
+      feeds: parseFeeds($(card).attr("data-feeds")),
     });
   });
   $("[id]")
     .filter((_, el) => /-w\d+$/.test($(el).attr("id") ?? ""))
     .each((_, el) => {
       if ($(el).closest('[aria-hidden="true"]').length) return;
-      champion = parseEntry($(el).text()) ?? champion; // last one wins (the final's)
+      champion = parseEntry(lines($, el).join(" ")) ?? champion; // last one wins (the final's)
     });
   return { games: [...byNum.values()], champion };
+}
+
+/**
+ * Card layout winners: the team in the slot a game feeds, if it played in that game. The entry there is an advancing
+ * one whatever NSAA prints (it may repeat the seed), and its score, if any, is the score of the game it won.
+ */
+function resultsFromFeeds(games: BracketGame[], champion?: BracketEntry) {
+  const sorted = [...games].sort((a, b) => a.num - b.num);
+  const byNum = new Map(sorted.map((g) => [g.num, g]));
+  for (const g of sorted) {
+    const f = g.feeds;
+    if (!f) continue;
+    const e = f === "champion" ? champion : byNum.get(f.game)?.[f.slot];
+    if (!e || (e.name !== g.top?.name && e.name !== g.bottom?.name)) continue;
+    g.winner = e.name;
+    if (e.score && e.score[0] > e.score[1]) g.score = e.score;
+    e.seed = undefined;
+  }
+  return sorted;
 }
 
 /**
@@ -165,7 +209,7 @@ export function parseBracketPage(html: string): ParsedBracket {
   const defaultSite =
     title.match(/\s+at\s+(.+)$/i)?.[1] ?? clean(h1.find("small").text()).match(/^Site:\s*(.+)$/i)?.[1];
   const { games, champion } = $("[data-team]").length ? parseCardLayout($) : parseTableLayout($);
-  const sorted = available ? inferResults(games, champion) : [];
+  const sorted = !available ? [] : games.some((g) => g.feeds) ? resultsFromFeeds(games, champion) : inferResults(games, champion);
   const seeds = new Map<string, { name: string; seed: number; avg?: number }>();
   for (const g of sorted)
     for (const e of [g.top, g.bottom])

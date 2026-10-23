@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildSeasonData } from "../src/lib/data/load";
+import { bracketPages, buildSeasonData } from "../src/lib/data/load";
 import { parseBracketPage, parseDistrictFinals } from "../src/lib/data/parse-brackets";
 import { matchTeamName } from "../src/lib/data/parse-html";
 import { project, runSimulation, type SeasonData } from "../src/lib/engine/simulate";
-import { compareProjection, siteHost } from "../src/lib/engine/official";
+import { compareProjection, officialStructureIssues, siteHost } from "../src/lib/engine/official";
 import type { OfficialClass, OfficialGroup, VbClass } from "../src/lib/engine/types";
 
 const RAW = join(__dirname, "..", "data", "raw");
@@ -73,6 +73,66 @@ describe("NSAA bracket pages (real samples)", () => {
     ]);
     expect(p.champion?.name).toBe("Millard North");
   });
+  it("2026 volleyball cards, B-1 pairings: seeds with averages, sites written 'at …', where each winner goes", () => {
+    const p = parseBracketPage(read(FIX, "vb-bracket-2026-B1-pairings.html"));
+    expect(p.seeds).toEqual([
+      { name: "Norris", seed: 1, avg: 46.3235 },
+      { name: "Scottsbluff", seed: 2, avg: 41.1212 },
+      { name: "South Sioux City", seed: 3, avg: 41.0476 },
+      { name: "Alliance", seed: 4, avg: 36.6774 },
+      { name: "Ralston", seed: 5, avg: 36.4286 },
+    ]);
+    expect(p.games[0]).toMatchObject({
+      num: 1,
+      date: "2026-10-27",
+      time: "5:00 PM CT",
+      site: "Lexington High School",
+      top: { name: "Alliance", seed: 4, wins: 5, losses: 26 },
+      feeds: { game: 3, slot: "bottom" },
+    });
+    expect(p.games.map((g) => g.feeds)).toEqual([
+      { game: 3, slot: "bottom" },
+      { game: 4, slot: "bottom" },
+      { game: 4, slot: "top" },
+      "champion",
+    ]);
+    expect(p.games.every((g) => !g.winner)).toBe(true);
+  });
+  it("2026 volleyball cards, 6-team C1-3 and D1-1 (site in the title)", () => {
+    const c = parseBracketPage(read(FIX, "vb-bracket-2026-C1-3-pairings.html"));
+    expect(c.seeds).toHaveLength(6);
+    expect(c.games).toHaveLength(5);
+    expect(c.games[0].site).toBe("Syracuse Middle School");
+    const d = parseBracketPage(read(FIX, "vb-bracket-2026-D1-1-pairings.html"));
+    expect(d.defaultSite).toBe("Falls City Sacred Heart Roh Activity Center");
+    expect(d.seeds.map((s) => s.seed)).toEqual([1, 2, 3, 4, 5]);
+  });
+  it("2026 volleyball cards with results: a winner is the team in the slot its game feeds, however it's printed", () => {
+    const p = parseBracketPage(read(FIX, "vb-bracket-2026-B1-results-synthetic.html"));
+    expect(p.games.map((g) => [g.num, g.winner, g.score?.join("-")])).toEqual([
+      [1, "Ralston", "3-1"],
+      [2, "Scottsbluff", "3-2"],
+      [3, "Norris", undefined], // reprinted with seed, record and points: no score to read
+      [4, "Norris", "3-0"],
+    ]);
+    expect(p.seeds.map((s) => s.name)).toEqual(["Norris", "Scottsbluff", "South Sioux City", "Alliance", "Ralston"]);
+  });
+  it("every 2026 bracket page loads, names match the schedule export, and NSAA's bracket is the one we simulate", () => {
+    const bracketHtml = Object.fromEntries(bracketPages().map(([id]) => [id, read(RAW, `brackets/${id}.html`)]));
+    const d = buildSeasonData({ ...raw, bracketHtml });
+    for (const c of CLASSES) {
+      const proj = project(d, c, CUTOFF);
+      expect(proj.official, c).toBe(true);
+      const names = new Set([...d.teams].filter(([, k]) => k === c).map(([n]) => n));
+      for (const b of proj.brackets) {
+        const og = d.official[c]!.groups[b.id];
+        expect(og.seeds.every((s) => names.has(s.name)), b.id).toBe(true);
+        expect(b.teams).toHaveLength(og.seeds.length);
+        expect(officialStructureIssues(b, og)).toEqual([]);
+        expect(b.matches.every((m) => m.time || m.date)).toBe(true);
+      }
+    }
+  });
   it("district finals: 2025 results and the 2026 to-be-determined page", () => {
     const done = parseDistrictFinals(read(FIX, "vb-finals-2025-results.html"));
     expect(done).toHaveLength(32);
@@ -104,6 +164,13 @@ describe("name matching and venues", () => {
     expect(siteHost("Duchesne", "Omaha Duchesne Academy", "Ralston")).toBe("Omaha Duchesne Academy");
     expect(siteHost("Northwest", "Omaha Gross Catholic", "Northwest")).toBe("Northwest");
     expect(siteHost("Lexington", "Gering", "York")).toBeUndefined();
+    // 2026 pages name the building
+    expect(siteHost("Gering High School", "Gering", "Lexington")).toBe("Gering");
+    expect(siteHost("Standing Bear HS", "Millard West", "Lincoln Standing Bear")).toBe("Lincoln Standing Bear");
+    expect(siteHost("EMF Public Schools, Friend, NE", "Exeter-Milligan-Friend", "McCool Junction")).toBe("Exeter-Milligan-Friend");
+    expect(siteHost('O"Neill High School', "ONeill", "Gibbon")).toBe("ONeill");
+    expect(siteHost("Bison Dome", "Central City", "Holdrege")).toBe("Central City");
+    expect(siteHost("Lexington High School", "Alliance", "Ralston")).toBeUndefined();
   });
   it("feeds a real bracket page through the loader with names matched to this season's teams", () => {
     const d = buildSeasonData({ ...raw, bracketHtml: { "B-5": read(FIX, "vb-bracket-2025-B5-results.html") } });

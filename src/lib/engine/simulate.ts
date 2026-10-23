@@ -73,6 +73,11 @@ export interface SimConfig {
   nSims: number;
   seed?: number;
   ratingNoise?: boolean;
+  /**
+   * What-if picks: bracket match id ("B-1-M3", "C2-DF4", "B-ST-F") → the team that wins it if it plays in it. Posted
+   * results always win over a pick; a pick for a team that doesn't reach the match is ignored in that run.
+   */
+  picks?: Record<string, string>;
 }
 
 export type Stage =
@@ -112,6 +117,9 @@ export interface SimResult {
   /** Deterministic projection from current data (unplayed matches ignored). */
   projection: Projection;
   ratingSummary: { home: number };
+  /** Bracket match id → winner → runs won (district / sub-district, district final and state matches). */
+  matchWins: Record<string, Record<string, number>>;
+  picks: Record<string, string>;
 }
 
 export interface Projection {
@@ -266,6 +274,16 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
   const rng = makeRng(cfg.seed ?? 20261020);
   const names = [...data.teams].filter(([, c]) => c === cfg.vbClass).map(([n]) => n);
   const stats: Record<string, TeamSimStats> = Object.fromEntries(names.map((n) => [n, emptyStats(n)]));
+  const picks = cfg.picks ?? {};
+  const matchWins: Record<string, Record<string, number>> = {};
+  /** Posted result, else a what-if pick for one of these two teams, else nothing (simulate it). */
+  const decide = (m: BracketMatch, a: string, b: string): MatchResult | undefined => {
+    const posted = fixedFor(m, a, b);
+    if (posted) return posted;
+    const p = picks[m.id];
+    return p === a || p === b ? { winner: p, loser: p === a ? b : a } : undefined;
+  };
+  const won = (m: BracketMatch, w: string) => inc((matchWins[m.id] ??= {}), w);
   const canon = canonicalize(data.matches);
   const remaining = canon.filter((m) => !m.played && m.date <= cfg.cutoff);
   const base = baseRecords(data);
@@ -308,11 +326,8 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
     };
     const play: PlayFn = (a, b, homeA, bestOf, date, hostOf, fixed) => {
       // A result NSAA has posted is the same in every run; it still counts toward later seeding averages.
-      const [sa, sb] = fixed
-        ? fixed.winner === a
-          ? [fixed.setsW, fixed.setsL]
-          : [fixed.setsL, fixed.setsW]
-        : simulateMatch(setP(a, b, homeA), bestOf, rng);
+      const [w, l] = [fixed?.setsW ?? 3, fixed?.setsL ?? 0];
+      const [sa, sb] = fixed ? (fixed.winner === a ? [w, l] : [l, w]) : simulateMatch(setP(a, b, homeA), bestOf, rng);
       const aWon = sa > sb;
       simRows.push({ date, winner: aWon ? a : b, loser: aWon ? b : a, setsW: Math.max(sa, sb), setsL: Math.min(sa, sb), hostOf });
       bump(a, aWon);
@@ -361,7 +376,7 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
     // 4. group brackets
     const groupWinners = new Map<string, string>();
     for (const br of proj.brackets) {
-      const winner = simulateBracket(br, data, play, stats, (m, isFinal) =>
+      const winner = simulateBracket(br, { data, play, stats, decide, won }, (m, isFinal) =>
         isFinal ? "group-final" : /#4 vs #5|#3 vs #6/.test(m.label) ? "group-r1" : "group-semi",
       );
       groupWinners.set(br.id, winner);
@@ -378,8 +393,9 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
         const [a, b] = [m.top!, m.bottom!];
         for (const t of [a, b]) if (stats[t]) stats[t].reachedDistrictFinal++;
         const homeA = m.host === a ? 1 : m.host === b ? -1 : 0;
-        const w = play(a, b, homeA, 5, m.date ?? DATES_2026.districtFinal, m.host ?? null, fixedFor(m, a, b));
+        const w = play(a, b, homeA, 5, m.date ?? DATES_2026.districtFinal, m.host ?? null, decide(m, a, b));
         tallyMatch(stats, "district-final", a, b, m.officialSite ?? m.host ?? "TBD");
+        won(m, w);
         stateField.push(w);
       }
       stateRecordsDate = DATES_2026.districtFinal;
@@ -396,8 +412,9 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
       stateField = [];
       for (const m of df.matches) {
         if (!m.top || !m.bottom) continue;
-        const w = play(m.top, m.bottom, 1, 5, m.date ?? DATES_2026.districtFinal, m.host ?? null);
+        const w = play(m.top, m.bottom, 1, 5, m.date ?? DATES_2026.districtFinal, m.host ?? null, decide(m, m.top, m.bottom));
         tallyMatch(stats, "district-final", m.top, m.bottom, m.host ?? m.site ?? "TBD");
+        won(m, w);
         stateField.push(w);
       }
       stateRecordsDate = DATES_2026.districtFinal;
@@ -418,7 +435,7 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
       inc(stats[t.name].stateSeed, t.seed);
     }
     const st = buildStateBracket(cfg.vbClass, stateSeeded);
-    const champ = simulateBracket(st, data, play, stats, (m) =>
+    const champ = simulateBracket(st, { data, play, stats, decide, won }, (m) =>
       m.round === 1 ? "state-quarter" : m.round === 2 ? "state-semi" : "state-final",
     );
     stats[champ].champion++;
@@ -432,6 +449,8 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
     teams: stats,
     projection: project(data, cfg.vbClass, cfg.cutoff),
     ratingSummary: { home: data.ratings.home },
+    matchWins,
+    picks,
   };
 }
 
@@ -465,13 +484,21 @@ function fixedFor(m: BracketMatch, a: string, b: string): MatchResult | undefine
 /**
  * Resolve "W:<matchId>" references and play a bracket in round order.
  * Returns the winner of the last match. Hosts: NSAA's listed venue when posted; otherwise the rules — Class A/B
- * finals at the highest remaining seed, Class B neutral site if > 300 miles. Posted results are fixed.
+ * finals at the highest remaining seed, Class B neutral site if > 300 miles. Posted results and what-if picks are fixed.
  */
+interface BracketContext {
+  data: SeasonData;
+  play: PlayFn;
+  stats: Record<string, TeamSimStats>;
+  /** Posted result or what-if pick for this match between these teams, if any. */
+  decide: (m: BracketMatch, a: string, b: string) => MatchResult | undefined;
+  /** Tally the match's winner. */
+  won: (m: BracketMatch, winner: string) => void;
+}
+
 function simulateBracket(
   br: Bracket,
-  data: SeasonData,
-  play: PlayFn,
-  stats: Record<string, TeamSimStats>,
+  { data, play, stats, decide, won }: BracketContext,
   stageOf: (m: BracketMatch, isFinal: boolean) => Stage,
 ): string {
   const winners = new Map<string, string>();
@@ -507,8 +534,9 @@ function simulateBracket(
       }
     }
     const homeA = host === a ? 1 : host === b ? -1 : 0;
-    const w = play(a, b, homeA, 5, m.date ?? "2026-10-31", host ?? null, fixedFor(m, a, b));
+    const w = play(a, b, homeA, 5, m.date ?? "2026-10-31", host ?? null, decide(m, a, b));
     winners.set(m.id, w);
+    won(m, w);
     const stage = stageOf(m, m.round === lastRound);
     tallyMatch(stats, stage, a, b, host ?? site ?? "TBD");
     if (stats[w]) {

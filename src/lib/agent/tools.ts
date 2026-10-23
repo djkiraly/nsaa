@@ -3,7 +3,7 @@
  * Each tool returns plain JSON the model can reason over.
  */
 import type Anthropic from "@anthropic-ai/sdk";
-import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "../data/season";
+import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES, validPicks } from "../data/season";
 import { NSAA_URLS } from "../data/load";
 import { parseBracketPage, parseDistrictFinals } from "../data/parse-brackets";
 import { matchWinProb, setWinProb } from "../engine/ratings";
@@ -43,10 +43,22 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: "simulate_postseason",
     description:
-      "Monte Carlo simulation (default 2000 runs) of the full postseason: probability each team wins its district/sub-district, qualifies for the district final (C2) or the wildcard (B), reaches state, and wins the title. Returns the top teams; use team_outlook for one team's detail.",
+      "Monte Carlo simulation (default 2000 runs) of the full postseason: probability each team wins its district/sub-district, qualifies for the district final (C1/C2/D1/D2) or the wildcard (A/B), reaches state, and wins the title. Results NSAA has posted are always fixed. For what-if questions pass `picks`: match ids from get_projected_brackets (or state games '<class>-ST-Q1'…'Q4', 'S1', 'S2', 'F') with the team that wins each if it gets there; the response then also gives each team's change from the no-picks baseline. Returns the top teams; use team_outlook for one team's detail.",
     input_schema: {
       type: "object",
-      properties: { vbClass: classParam, topN: { type: "integer", description: "how many teams to return (default 20)" } },
+      properties: {
+        vbClass: classParam,
+        topN: { type: "integer", description: "how many teams to return (default 20)" },
+        picks: {
+          type: "array",
+          description: "what-if winners, e.g. [{ matchId: 'B-5-M3', winner: 'Gretna East' }]",
+          items: {
+            type: "object",
+            properties: { matchId: { type: "string" }, winner: { type: "string", description: "team name as NSAA prints it" } },
+            required: ["matchId", "winner"],
+          },
+        },
+      },
       required: ["vbClass"],
     },
   },
@@ -171,13 +183,14 @@ export async function runTool(name: string, input: Json): Promise<Json> {
       const want = (input.groupId as string | undefined)?.toUpperCase();
       const brackets = proj.brackets.filter((b) => !want || b.id === want);
       const match = (m: BracketMatch) => ({
+        id: m.id,
         label: m.label,
         date: m.date,
         time: m.time,
         top: m.top,
         bottom: m.bottom,
         site: m.officialSite ?? m.host ?? (m.site ? `neutral: ${m.site}` : "highest remaining seed"),
-        result: m.result ? `${m.result.winner} def. ${m.result.loser} ${m.result.setsW}-${m.result.setsL}` : undefined,
+        result: m.result ? `${m.result.winner} def. ${m.result.loser}${m.result.setsW !== undefined ? ` ${m.result.setsW}-${m.result.setsL}` : ""}` : undefined,
       });
       return {
         vbClass,
@@ -196,13 +209,39 @@ export async function runTool(name: string, input: Json): Promise<Json> {
     case "simulate_postseason": {
       const vbClass = input.vbClass as VbClass;
       const topN = Number(input.topN ?? 20);
-      const sim = await getSimulation(vbClass);
+      const classNames = [...data.teams.keys()].filter((t) => data.teams.get(t) === vbClass);
+      const asked = Array.isArray(input.picks) ? (input.picks as { matchId?: unknown; winner?: unknown }[]) : [];
+      const picks = await validPicks(
+        vbClass,
+        Object.fromEntries(asked.map((p) => [String(p.matchId ?? "").toUpperCase(), findTeam(classNames, String(p.winner ?? "")) ?? ""])),
+      );
+      const ignored = asked.filter((p) => !(String(p.matchId ?? "").toUpperCase() in picks));
+      const sim = await getSimulation(vbClass, 2000, picks);
+      const base = Object.keys(picks).length ? await getSimulation(vbClass) : null;
       const n = sim.nSims;
       const rows = Object.values(sim.teams)
-        .map((t) => summarize(t, n, vbClass))
+        .map((t) => {
+          const row = summarize(t, n, vbClass);
+          if (!base) return row;
+          const b = base.teams[t.name];
+          return {
+            ...row,
+            changeFromBaseline: {
+              pReachState: Number((pct(t.reachedState, n) - pct(b.reachedState, base.nSims)).toFixed(1)),
+              pChampion: Number((pct(t.champion, n) - pct(b.champion, base.nSims)).toFixed(1)),
+            },
+          };
+        })
         .sort((a, b) => (b.pReachState as number) - (a.pReachState as number))
         .slice(0, topN);
-      return { vbClass, nSims: n, seedingCutoff: sim.cutoff, homeAdvantageSetLogit: sim.ratingSummary.home, teams: rows };
+      return {
+        vbClass,
+        nSims: n,
+        seedingCutoff: sim.cutoff,
+        homeAdvantageSetLogit: sim.ratingSummary.home,
+        ...(asked.length ? { picksApplied: picks, picksIgnored: ignored } : {}),
+        teams: rows,
+      };
     }
     case "team_outlook": {
       const vbClass = input.vbClass as VbClass;

@@ -9,7 +9,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { CLASS_ORDER, type VbClass } from "../engine/types";
 import { bracketPages, buildSeasonData, NSAA_URLS } from "./load";
-import { project, runSimulation, type SeasonData, type SimResult } from "../engine/simulate";
+import { project, runSimulation, type SeasonData, type SimResult, type TeamSimStats } from "../engine/simulate";
 import { compareProjection, type ProjectionCheck } from "../engine/official";
 
 export const SEASON = Number(process.env.NSAA_SEASON ?? 2026);
@@ -142,14 +142,76 @@ export async function getProjectionCheck(vbClass: VbClass): Promise<ProjectionCh
   return compareProjection(project(s.data, vbClass, SEEDING_CUTOFF, { computedOnly: true }).groups, official.groups);
 }
 
-export async function getSimulation(vbClass: VbClass, nSims = 2000): Promise<SimResult> {
+/** What-if runs kept per snapshot, besides each class's baseline (oldest dropped first). */
+const MAX_CACHED_SCENARIOS = 64;
+
+export async function getSimulation(vbClass: VbClass, nSims = 2000, picks: Record<string, string> = {}): Promise<SimResult> {
   const s = await loadSeason();
-  const k = `${vbClass}:${nSims}`;
+  const pickKey = Object.entries(picks)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([m, t]) => `${m}=${t}`)
+    .join("|");
+  const k = `${vbClass}:${nSims}${pickKey ? `:${pickKey}` : ""}`;
   const hit = cache?.sims.get(k);
   if (hit) return hit;
-  const res = runSimulation(s.data, { vbClass, cutoff: SEEDING_CUTOFF, nSims, seed: 20261020 });
-  cache?.sims.set(k, res);
+  const res = runSimulation(s.data, { vbClass, cutoff: SEEDING_CUTOFF, nSims, seed: 20261020, picks });
+  if (cache) {
+    cache.sims.set(k, res);
+    const scenarios = [...cache.sims.keys()].filter((x) => x.split(":").length > 2);
+    for (const old of scenarios.slice(0, Math.max(0, scenarios.length - MAX_CACHED_SCENARIOS))) cache.sims.delete(old);
+  }
   return res;
+}
+
+/** Ids of every bracket match a what-if pick can name for a class: districts / sub-districts, district finals, state. */
+export async function pickableMatches(vbClass: VbClass): Promise<Set<string>> {
+  const proj = await getProjection(vbClass);
+  const ids = [...proj.brackets, ...(proj.districtFinals ? [proj.districtFinals] : [])].flatMap((b) => b.matches.map((m) => m.id));
+  return new Set([...ids, ...["Q1", "Q2", "Q3", "Q4", "S1", "S2", "F"].map((k) => `${vbClass}-ST-${k}`)]);
+}
+
+/** Keep only picks that name a real match of the class and one of its teams. */
+export async function validPicks(vbClass: VbClass, picks: unknown): Promise<Record<string, string>> {
+  if (!picks || typeof picks !== "object") return {};
+  const s = await loadSeason();
+  const matches = await pickableMatches(vbClass);
+  return Object.fromEntries(
+    Object.entries(picks as Record<string, unknown>).filter(
+      (e): e is [string, string] => matches.has(e[0]) && typeof e[1] === "string" && s.data.teams.get(e[1]) === vbClass,
+    ),
+  );
+}
+
+/** The per-team odds and per-match winners of a run, without the opponent / site breakdowns (for the browser). */
+export interface SimSummary {
+  vbClass: VbClass;
+  nSims: number;
+  picks: Record<string, string>;
+  teams: Record<string, Pick<TeamSimStats, "wonGroup" | "reachedDistrictFinal" | "wildcard" | "reachedState" | "wonStateQuarter" | "wonStateSemi" | "champion">>;
+  matchWins: SimResult["matchWins"];
+}
+
+export function summarizeSimulation(res: SimResult): SimSummary {
+  return {
+    vbClass: res.vbClass,
+    nSims: res.nSims,
+    picks: res.picks,
+    teams: Object.fromEntries(
+      Object.values(res.teams).map((t) => [
+        t.name,
+        {
+          wonGroup: t.wonGroup,
+          reachedDistrictFinal: t.reachedDistrictFinal,
+          wildcard: t.wildcard,
+          reachedState: t.reachedState,
+          wonStateQuarter: t.wonStateQuarter,
+          wonStateSemi: t.wonStateSemi,
+          champion: t.champion,
+        },
+      ]),
+    ),
+    matchWins: res.matchWins,
+  };
 }
 
 /** Run every class's simulation (~1 s each) so the first page view after a refresh doesn't pay for it. */

@@ -19,6 +19,6 @@ export async function GET(req: NextRequest) {
   const { stored } = await refreshSnapshots();
   await warmSimulations();
   revalidatePath("/", "layout");
-  const warm = ["/", ...SUPPORTED_CLASSES.map((c) => `/class/${c}`)];
+  const warm = ["/", ...SUPPORTED_CLASSES.flatMap((c) => [`/class/${c}`, `/class/${c}/simulate`])];
   return Response.json({ ok: true, stored, warm, at: new Date().toISOString() });
 }
