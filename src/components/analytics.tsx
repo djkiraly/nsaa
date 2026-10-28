@@ -39,6 +39,13 @@ function ids(): { v: string; s: string; fresh: boolean } {
   return { v, s: s.id, fresh };
 }
 
+/** The current visitor and visit ids, for tying a chat transcript to its visit — none when the browser is opted out. */
+export function analyticsIds(): { visitorId: string; sessionId: string } | undefined {
+  if (optedOut()) return undefined;
+  const { v, s } = ids();
+  return { visitorId: v, sessionId: s };
+}
+
 export function track(type: "pageview" | "ping" | "chat") {
   if (optedOut() || location.pathname.startsWith("/analytics")) return;
   const { v, s, fresh } = ids();

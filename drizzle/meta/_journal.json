@@ -15,6 +15,13 @@
       "when": 1792509562838,
       "tag": "0001_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793211593815,
+      "tag": "0002_chat_transcripts",
+      "breakpoints": true
     }
   ]
 }

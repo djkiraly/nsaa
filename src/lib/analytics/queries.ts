@@ -27,7 +27,9 @@ export interface Ranked {
 }
 
 export interface RecentVisit {
+  id: string;
   startedAt: Date;
+  chats: number;
   seconds: number;
   pageviews: number;
   entryPath: string | null;
@@ -145,9 +147,11 @@ export async function getDashboard(range: RangeKey): Promise<Dashboard> {
       ranked(sql`coalesce(device, 'unknown')`),
       ranked(sql`coalesce(browser, 'Other')`, sql`coalesce(os, '')`),
       rows<{
+        id: string;
         started_at: Date;
         seconds: number;
         pageviews: number;
+        chats: number;
         entry_path: string | null;
         city: string | null;
         region: string | null;
@@ -156,7 +160,8 @@ export async function getDashboard(range: RangeKey): Promise<Dashboard> {
         browser: string | null;
         referrer: string | null;
       }>(sql`
-        select started_at, ${seconds}::float as seconds, pageviews, entry_path, city, region, country, device, browser, referrer
+        select id, started_at, ${seconds}::float as seconds, pageviews, entry_path, city, region, country, device, browser, referrer,
+          (select count(*)::int from analytics_events e where e.session_id = analytics_sessions.id and e.type = 'chat') as chats
         from analytics_sessions where ${inRange} order by started_at desc limit 30`),
     ]);
 
@@ -195,9 +200,11 @@ export async function getDashboard(range: RangeKey): Promise<Dashboard> {
     devices: devices.map(asRanked),
     browsers: browsers.map(asRanked),
     recent: recent.map((x) => ({
+      id: x.id,
       startedAt: new Date(x.started_at),
       seconds: x.seconds,
       pageviews: x.pageviews,
+      chats: x.chats,
       entryPath: x.entry_path,
       place: [x.city, x.region, x.country].filter(Boolean).join(", ") || "Unknown",
       device: x.device,

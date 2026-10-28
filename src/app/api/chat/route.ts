@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
+import { z } from "zod";
 import { TOOL_DEFS, runTool } from "@/lib/agent/tools";
 import { SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
+import { assistantRecord, clip, logChatMessage, type ToolRun } from "@/lib/chat-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -33,22 +35,39 @@ How you work:
 - Be concise and concrete. Use short tables or bullet lists for standings/brackets. Use team names exactly as NSAA prints them.
 - Today's date: ${new Date().toISOString().slice(0, 10)}.`;
 
-interface ChatBody {
-  messages: { role: "user" | "assistant"; content: string }[];
-}
+const id = z.string().regex(/^[\w-]{8,64}$/);
+const Body = z.object({
+  messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).min(1),
+  /** One per chat page load; ties the questions and answers of one conversation together in chat_messages. */
+  conversationId: id.optional(),
+  /** The analytics visit / visitor (components/analytics.tsx), absent when the browser is opted out of tracking. */
+  sessionId: id.optional(),
+  visitorId: id.optional(),
+});
 
 export async function POST(req: NextRequest) {
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY is not set" }), { status: 500 });
   }
-  const body = (await req.json()) as ChatBody;
+  const parsed = Body.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return new Response(JSON.stringify({ error: "Bad request" }), { status: 400 });
+  const body = parsed.data;
   const client = new Anthropic();
   const messages: Anthropic.MessageParam[] = body.messages.slice(-20).map((m) => ({ role: m.role, content: m.content }));
+
+  // Transcript: the question now, the answer (text, tool calls, tokens, timing) once the stream ends.
+  const log = body.conversationId ? { conversationId: body.conversationId, sessionId: body.sessionId, visitorId: body.visitorId } : null;
+  const question = body.messages[body.messages.length - 1];
+  if (log && question.role === "user") void logChatMessage(log, "user", { text: question.content }, MODEL);
+  const started = Date.now();
+  const turns: Anthropic.Message[] = [];
+  const toolRuns: ToolRun[] = [];
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      let error: string | undefined;
       try {
         for (let turn = 0; turn < 8; turn++) {
           const s = client.messages.stream({
@@ -60,27 +79,33 @@ export async function POST(req: NextRequest) {
           });
           s.on("text", (delta) => send({ type: "text", delta }));
           const final = await s.finalMessage();
+          turns.push(final);
           messages.push({ role: "assistant", content: final.content });
           const toolUses = final.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
           if (final.stop_reason !== "tool_use" || toolUses.length === 0) break;
           const results: Anthropic.ToolResultBlockParam[] = [];
           for (const tu of toolUses) {
             send({ type: "tool", name: tu.name, input: tu.input });
+            const t0 = Date.now();
             let out: unknown;
             try {
               out = await runTool(tu.name, tu.input as Record<string, unknown>);
             } catch (e) {
               out = { error: e instanceof Error ? e.message : String(e) };
             }
-            results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
+            const json = JSON.stringify(out);
+            toolRuns.push({ name: tu.name, input: tu.input, result: clip(json), ms: Date.now() - t0 });
+            results.push({ type: "tool_result", tool_use_id: tu.id, content: json });
           }
           messages.push({ role: "user", content: results });
         }
         send({ type: "done" });
       } catch (e) {
-        send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+        error = e instanceof Error ? e.message : String(e);
+        send({ type: "error", message: error });
       } finally {
         controller.close();
+        if (log) void logChatMessage(log, "assistant", assistantRecord(turns, toolRuns, Date.now() - started, error), MODEL);
       }
     },
   });

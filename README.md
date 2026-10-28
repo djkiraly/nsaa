@@ -39,7 +39,7 @@ npm run sim -- B 5000             # CLI simulation summary
 Set `DATABASE_URL` to any Postgres connection string (local or hosted), then:
 
 ```bash
-npm run db:migrate                # applies drizzle/*.sql: snapshots / sim_runs / chat_messages
+npm run db:migrate                # applies drizzle/*.sql: snapshots / sim_runs / analytics / chat_messages
 npm run refresh                   # asks the running app to scrape NSAA into the DB
 ```
 
@@ -154,8 +154,12 @@ First-party and self-hosted: no third-party script, no cookies for visitors, no 
 
 - `src/components/analytics.tsx` sends a page view on every navigation and a heartbeat every 30 s while the page is
   visible (that's how visit length is measured) to `POST /api/e`. A random visitor id lives in localStorage; a visit
-  ends after 30 idle minutes. Chat questions are counted (not their text). Browsers sending Global Privacy Control /
-  Do Not Track, bots, and the dashboard itself aren't counted.
+  ends after 30 idle minutes. Browsers sending Global Privacy Control / Do Not Track, bots, and the dashboard itself
+  aren't counted.
+- **Conversations.** `POST /api/chat` stores every question and answer (text, tool calls with their inputs and
+  clipped results, tokens, timing, errors) in `chat_messages`, keyed by a per-page-load conversation id and, unless
+  the browser opted out, the visit it belongs to. `/analytics/chats` lists them, `/analytics/chats/<id>` shows the
+  transcript, and `/analytics/sessions/<id>` shows one visit's page-by-page history with its conversations.
 - Location (city / state / country) comes from DB-IP's free IP-to-City Lite database (CC BY 4.0), downloaded to
   `data/geo/` by `npm run geoip` — the installer does it and the nightly update refreshes it monthly.
 - **Dashboard: `/analytics`** — not linked anywhere and answers 404 like any unknown page until you open

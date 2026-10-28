@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, cn } from "@/components/ui";
-import { track } from "@/components/analytics";
+import { analyticsIds, track } from "@/components/analytics";
 
 interface Msg {
   role: "user" | "assistant";
@@ -24,6 +24,8 @@ export default function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  /** One conversation per page load; the server stores the transcript under it (see /analytics). */
+  const conversation = useRef<string | null>(null);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -37,12 +39,17 @@ export default function ChatPage() {
     setMessages(next);
     setInput("");
     setBusy(true);
-    track("chat"); // counts the question; its text isn't sent
+    track("chat"); // counts the question in the visit; the transcript itself is stored by /api/chat
+    conversation.current ??= crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })) }),
+        body: JSON.stringify({
+          messages: next.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
+          conversationId: conversation.current,
+          ...analyticsIds(),
+        }),
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       const reader = res.body.getReader();

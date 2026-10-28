@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { existsSync } from "node:fs";
-import { cookies } from "next/headers";
-import { notFound } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle, cn, Table, Td, Th } from "@/components/ui";
+import { Card, CardContent, CardHeader, CardTitle, Table, Td, Th } from "@/components/ui";
 import { VisitsChart } from "@/components/visits-chart";
-import { ANALYTICS_COOKIE, isAnalyticsCookie } from "@/lib/analytics/auth";
+import { listConversations, sinceFor } from "@/lib/analytics/chats";
 import { GEOIP_PATH } from "@/lib/analytics/geo";
-import { getDashboard, RANGES, TZ, type RangeKey, type Ranked } from "@/lib/analytics/queries";
+import { getDashboard, TZ, type Ranked } from "@/lib/analytics/queries";
+import { duration, fmtTime, num, requireAnalyticsCookie } from "@/lib/analytics/shared";
 import { db } from "@/lib/db";
+import { AnalyticsNav, rangeFrom } from "./nav";
 
 // Private usage dashboard. Not linked anywhere; proxy.ts answers with the site's normal 404 unless the visitor has
 // the access cookie (set when /analytics?key=<ANALYTICS_KEY> is opened once).
@@ -16,22 +16,13 @@ export const dynamic = "force-dynamic";
 // No title of its own: a 404 for this URL must look exactly like one for any URL that doesn't exist.
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
-function duration(s: number): string {
-  const sec = Math.round(s);
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
-  return `${Math.floor(sec / 3600)}h ${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}m`;
-}
 const pct = (x: number) => `${Math.round(100 * x)}%`;
-const num = (x: number) => x.toLocaleString("en-US");
 
 export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
-  // proxy.ts already turns away anyone without the cookie; checking again means the page can't render without it.
-  if (!isAnalyticsCookie((await cookies()).get(ANALYTICS_COOKIE)?.value)) notFound();
-  const requested = (await searchParams).range;
-  const range: RangeKey = requested && requested in RANGES ? (requested as RangeKey) : "7d";
+  await requireAnalyticsCookie();
+  const range = rangeFrom((await searchParams).range);
   if (!db) return <p className="text-sm text-muted">Analytics needs a database: set DATABASE_URL.</p>;
-  const d = await getDashboard(range);
+  const [d, convos] = await Promise.all([getDashboard(range), listConversations(sinceFor(range), 15)]);
 
   const tiles: { label: string; value: string; sub?: string }[] = [
     { label: "Visitors", value: num(d.visitors), sub: d.visitors ? `${pct(d.returningVisitors / d.visitors)} returning` : undefined },
@@ -53,23 +44,8 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
         </p>
       </div>
 
-      {/* One filter row, above everything it scopes. */}
-      <nav className="flex flex-wrap gap-1.5 text-sm" aria-label="Time range">
-        {(Object.keys(RANGES) as RangeKey[]).map((k) => (
-          <Link
-            key={k}
-            href={`/analytics?range=${k}`}
-            prefetch={false}
-            aria-current={k === range ? "page" : undefined}
-            className={cn(
-              "rounded-md border px-3 py-1.5",
-              k === range ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-muted-bg",
-            )}
-          >
-            {RANGES[k].label}
-          </Link>
-        ))}
-      </nav>
+      {/* Section links and the filter row, above everything they scope. */}
+      <AnalyticsNav current="/analytics" range={range} />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
         {tiles.map((t) => (
@@ -109,8 +85,42 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex items-center justify-between">
+          <CardTitle>Recent conversations</CardTitle>
+          <Link href={`/analytics/chats${range !== "7d" ? `?range=${range}` : ""}`} prefetch={false} className="text-sm text-accent hover:underline">
+            All conversations →
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {convos.length === 0 ? (
+            <p className="text-sm text-muted">No conversations in this range yet.</p>
+          ) : (
+            <ul className="text-sm space-y-2">
+              {convos.map((c) => (
+                <li key={c.id} className="flex items-baseline gap-3">
+                  <Link href={`/analytics/chats/${c.id}`} prefetch={false} className="tabular whitespace-nowrap text-accent hover:underline">
+                    {fmtTime(c.startedAt)}
+                  </Link>
+                  <Link href={`/analytics/chats/${c.id}`} prefetch={false} className="min-w-0 flex-1 line-clamp-1 hover:underline">
+                    {c.firstQuestion || "(empty)"}
+                  </Link>
+                  <span className="shrink-0 text-xs text-muted whitespace-nowrap">
+                    {c.questions} q · {c.place ?? "not tracked"}
+                    {c.hadError && <span className="text-accent"> · error</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex items-center justify-between">
           <CardTitle>Recent visits</CardTitle>
+          <Link href={`/analytics/sessions${range !== "7d" ? `?range=${range}` : ""}`} prefetch={false} className="text-sm text-accent hover:underline">
+            All visits →
+          </Link>
         </CardHeader>
         <CardContent>
           {d.recent.length === 0 ? (
@@ -123,22 +133,26 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
                   <Th>Location</Th>
                   <Th>Device</Th>
                   <Th className="text-right">Pages</Th>
+                  <Th className="text-right">Chats</Th>
                   <Th className="text-right">Length</Th>
                   <Th>Landed on</Th>
                   <Th>Source</Th>
                 </tr>
               </thead>
               <tbody className="tabular">
-                {d.recent.map((v, i) => (
-                  <tr key={i}>
+                {d.recent.map((v) => (
+                  <tr key={v.id} className="hover:bg-muted-bg/60">
                     <Td className="whitespace-nowrap">
-                      {v.startedAt.toLocaleString("en-US", { timeZone: TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                      <Link href={`/analytics/sessions/${v.id}`} prefetch={false} className="text-accent hover:underline">
+                        {fmtTime(v.startedAt)}
+                      </Link>
                     </Td>
                     <Td>{v.place}</Td>
                     <Td className="whitespace-nowrap">
                       {v.device ?? "—"} · {v.browser ?? "—"}
                     </Td>
                     <Td className="text-right">{v.pageviews}</Td>
+                    <Td className="text-right">{v.chats || <span className="text-muted">—</span>}</Td>
                     <Td className="text-right">{duration(v.seconds)}</Td>
                     <Td>{v.entryPath ?? "—"}</Td>
                     <Td>{v.referrer ?? "Direct / none"}</Td>
@@ -152,7 +166,8 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
 
       <p className="text-xs text-muted">
         Visitors are counted by a random id in the browser; no IP addresses are stored. Browsers that send Global
-        Privacy Control or Do Not Track aren&apos;t counted. IP geolocation by{" "}
+        Privacy Control or Do Not Track aren&apos;t counted, and their chats aren&apos;t tied to a visit. Chat questions
+        and the agent&apos;s answers are stored (Conversations) to improve the agent. IP geolocation by{" "}
         <a href="https://db-ip.com" rel="noreferrer" target="_blank" className="underline">
           DB-IP
         </a>{" "}

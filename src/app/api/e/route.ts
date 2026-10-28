@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 /**
  * Analytics collector (sent by components/analytics.tsx; named /api/e so blockers that drop "/track" don't).
  *   pageview → upsert the visit (location + device on first sight) and log the view
- *   chat     → same, logging a chat question (its text is not stored)
+ *   chat     → same, logging that a chat question was asked (the transcript itself is stored by /api/chat)
  *   ping     → heartbeat: extends the visit's last_seen_at, which is how visit length is measured
  * Always answers 204 — analytics must never break a page.
  */

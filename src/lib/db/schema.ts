@@ -78,11 +78,25 @@ export const analyticsEvents = pgTable(
   (t) => [index("analytics_events_at").on(t.at, t.type)],
 );
 
-/** Chat transcripts (optional; useful for improving the agent). */
-export const chatMessages = pgTable("chat_messages", {
-  id: serial("id").primaryKey(),
-  sessionId: text("session_id").notNull(),
-  role: text("role").notNull(),
-  content: jsonb("content").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+/**
+ * Chat transcripts, shown on the private /analytics pages. One row per question (role "user", content
+ * `{ text }`) and per answer (role "assistant", content `{ text, tools, usage, ms, error? }` — see
+ * src/lib/chat-log.ts). A conversation is one chat page load; the visit and visitor ids tie it to the analytics
+ * session when the browser isn't opted out of tracking.
+ */
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: serial("id").primaryKey(),
+    /** random id from the browser, one per chat page load */
+    conversationId: text("conversation_id").notNull().default(""),
+    /** analytics visit id (analytics_sessions.id), when tracking is on */
+    sessionId: text("session_id"),
+    visitorId: text("visitor_id"),
+    role: text("role").notNull(),
+    content: jsonb("content").notNull(),
+    model: text("model"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_messages_conversation").on(t.conversationId, t.createdAt), index("chat_messages_created").on(t.createdAt)],
+);
