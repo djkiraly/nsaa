@@ -1,5 +1,5 @@
 /** Team status badges and the per-class "where everyone stands" overview, from engine/status. */
-import { Badge, Card, CardContent } from "@/components/ui";
+import { Badge, Card, CardContent, cn } from "@/components/ui";
 import type { StatusKind, TeamStatus } from "@/lib/engine/status";
 
 type Variant = "default" | "accent" | "good" | "warn" | "outline";
@@ -18,7 +18,7 @@ const VARIANT: Record<StatusKind, Variant> = {
   alive: "outline",
   "at-large": "warn",
   "likely-out": "outline",
-  eliminated: "default",
+  eliminated: "accent",
 };
 
 /** Compact badge; nothing for a team that's simply still playing (the usual case), unless `showAlive`. */
@@ -64,7 +64,7 @@ export function StatusOverview({ statuses }: { statuses: Map<string, TeamStatus>
           {count("qualified", "champion") > 0 && <Badge variant="good">{count("qualified", "champion")} at state</Badge>}
           {count("at-large") > 0 && <Badge variant="warn">{count("at-large")} at-large hopes</Badge>}
           {count("likely-out") > 0 && <Badge variant="outline">{count("likely-out")} likely out</Badge>}
-          <Badge>{count("eliminated")} out</Badge>
+          <Badge variant="accent">{count("eliminated")} out</Badge>
         </div>
         {sections
           .filter((s) => by(s.kind).length > 0)
@@ -76,7 +76,8 @@ export function StatusOverview({ statuses }: { statuses: Map<string, TeamStatus>
               <ul className="mt-1.5 space-y-1 text-xs">
                 {by(s.kind).map((r) => (
                   <li key={r.team}>
-                    <span className="font-medium">{r.team}</span> <span className="text-muted">— {r.summary}</span>
+                    <span className={cn("font-medium", r.kind === "eliminated" && "line-through text-accent decoration-accent")}>{r.team}</span>{" "}
+                    <span className="text-muted">— {r.summary}</span>
                   </li>
                 ))}
               </ul>

@@ -19,6 +19,9 @@ import { DATES_2026, hasDistrictFinals } from "@/lib/engine/brackets";
 // Static per class, regenerated when /api/refresh stores new NSAA data (see app/page.tsx).
 export const revalidate = 3600;
 
+/** A team whose season is over: struck through in red wherever it appears. */
+const OUT = "line-through text-accent decoration-accent";
+
 export function generateStaticParams() {
   return SUPPORTED_CLASSES.map((cls) => ({ cls }));
 }
@@ -110,7 +113,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                 <li key={t.name} className="px-3 py-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className={cn("font-medium", st?.kind === "eliminated" && "line-through text-muted")}>
+                      <div className={cn("font-medium", st?.kind === "eliminated" && OUT)}>
                         <span className="tabular text-muted mr-1.5">{t.seed}</span>
                         {t.name}
                       </div>
@@ -164,7 +167,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                   return (
                     <tr key={t.name} className="hover:bg-muted-bg/60">
                       <Td className="tabular text-muted">{t.seed}</Td>
-                      <Td className={cn("font-medium whitespace-nowrap", st?.kind === "eliminated" && "line-through text-muted")}>
+                      <Td className={cn("font-medium whitespace-nowrap", st?.kind === "eliminated" && OUT)}>
                         {t.name}
                       </Td>
                       <Td className="tabular">
@@ -308,7 +311,8 @@ function BracketCard({
   const Slot = ({ m, slot }: { m: BracketMatch; slot: string | null }) => {
     const t = teamOf(slot);
     const lost = !!t && m.result?.loser === t;
-    return <span className={cn(lost && "line-through text-muted")}>{label(slot)}</span>;
+    const out = lost && statusOf(t)?.kind === "eliminated";
+    return <span className={cn(lost && (out ? OUT : "line-through text-muted"))}>{label(slot)}</span>;
   };
   return (
     <Card>
@@ -322,7 +326,7 @@ function BracketCard({
             const st = statusOf(t.name);
             return (
               <li key={t.name} className="flex items-center justify-between gap-2">
-                <span className={cn("min-w-0", st?.kind === "eliminated" && "line-through text-muted")}>
+                <span className={cn("min-w-0", st?.kind === "eliminated" && OUT)}>
                   <span className="text-muted tabular mr-1">{t.seed}.</span>
                   {t.name}{" "}
                   <span className="text-muted text-xs tabular">
