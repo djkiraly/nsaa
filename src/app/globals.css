@@ -17,6 +17,8 @@
   --accent-soft: #fee2e2;
   --good: #15803d;
   --good-soft: #dcfce7;
+  --warn: #b45309;
+  --warn-soft: #fef3c7;
 }
 
 @theme inline {
@@ -31,6 +33,8 @@
   --color-accent-soft: var(--accent-soft);
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -50,6 +54,8 @@
   --accent-soft: #3b1212;
   --good: #4ade80;
   --good-soft: #0f2d1a;
+  --warn: #fbbf24;
+  --warn-soft: #3a2a08;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -66,6 +72,8 @@
     --accent-soft: #3b1212;
     --good: #4ade80;
     --good-soft: #0f2d1a;
+    --warn: #fbbf24;
+    --warn-soft: #3a2a08;
   }
 }
 

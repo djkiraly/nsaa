@@ -1,10 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Badge, Card, CardContent, CardHeader, CardTitle, Prob, ProbStat, Table, Td, Th } from "@/components/ui";
-import { getProjection, getProjectionCheck, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
+import { Badge, Card, CardContent, CardHeader, CardTitle, cn, Prob, ProbStat, Table, Td, Th } from "@/components/ui";
+import { StatusBadge, StatusOverview } from "@/components/status";
+import {
+  getProjection,
+  getProjectionCheck,
+  getSimulation,
+  getStatuses,
+  loadSeason,
+  SEEDING_CUTOFF,
+  SUPPORTED_CLASSES,
+} from "@/lib/data/season";
 import type { VbClass } from "@/lib/engine/types";
-import type { Bracket } from "@/lib/engine/types";
-import { hasDistrictFinals } from "@/lib/engine/brackets";
+import type { Bracket, BracketMatch } from "@/lib/engine/types";
+import type { TeamStatus } from "@/lib/engine/status";
+import { DATES_2026, hasDistrictFinals } from "@/lib/engine/brackets";
 
 // Static per class, regenerated when /api/refresh stores new NSAA data (see app/page.tsx).
 export const revalidate = 3600;
@@ -34,17 +44,21 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
   const { cls } = await params;
   const vbClass = cls.toUpperCase() as VbClass;
   if (!SUPPORTED_CLASSES.includes(vbClass)) notFound();
-  const [season, proj, sim, check] = await Promise.all([
+  const [season, proj, sim, check, statuses] = await Promise.all([
     loadSeason(),
     getProjection(vbClass),
     getSimulation(vbClass),
     getProjectionCheck(vbClass),
+    getStatuses(vbClass),
   ]);
   const groupWord = hasDistrictFinals(vbClass) ? "sub-district" : "district";
   const n = sim.nSims;
   const hasDF = hasDistrictFinals(vbClass);
   const groupOf = new Map<string, { id: string; seed: number }>();
   for (const g of proj.groups) for (const t of g.teams) groupOf.set(t.name, { id: g.id, seed: t.seed });
+  const statusOf = (t: string) => statuses.get(t);
+  /** Something has happened: a result that decided or threatens someone's season. */
+  const anyResults = [...statuses.values()].some((s) => s.kind !== "alive" || s.won);
 
   return (
     <div className="space-y-8">
@@ -55,10 +69,15 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
             Wildcard standings through {SEEDING_CUTOFF} · {n.toLocaleString()} simulations · data{" "}
             {season.fetchedAt.toLocaleString("en-US", { timeZone: "America/Chicago" })} CT
           </p>
-          <nav className="md:hidden mt-3 flex gap-2 text-sm">
+          <nav className="md:hidden mt-3 flex flex-wrap gap-2 text-sm">
             <a href="#standings" className="rounded-md border border-border bg-card px-3 py-1.5">
               Standings ↓
             </a>
+            {anyResults && (
+              <a href="#status" className="rounded-md border border-border bg-card px-3 py-1.5">
+                Who&apos;s out ↓
+              </a>
+            )}
             <a href="#brackets" className="rounded-md border border-border bg-card px-3 py-1.5">
               {hasDF ? "Sub-districts" : "Districts"} ↓
             </a>
@@ -80,17 +99,18 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
 
       <section id="standings" className="max-md:scroll-mt-28">
         <h2 className="text-lg font-semibold mb-2">Standings & simulation</h2>
-        {/* Phones: one compact card per team instead of the 10-column table. */}
+        {/* Phones: one compact card per team instead of the 11-column table. */}
         <Card className="md:hidden">
           <ul className="divide-y divide-border/60">
             {proj.overall.map((t) => {
               const s = sim.teams[t.name];
               const g = groupOf.get(t.name);
+              const st = statusOf(t.name);
               return (
                 <li key={t.name} className="px-3 py-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="font-medium">
+                      <div className={cn("font-medium", st?.kind === "eliminated" && "line-through text-muted")}>
                         <span className="tabular text-muted mr-1.5">{t.seed}</span>
                         {t.name}
                       </div>
@@ -99,10 +119,14 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                         {(season.data.ratings.rating.get(t.name) ?? 0).toFixed(2)}
                       </div>
                     </div>
-                    <Badge className="shrink-0">
-                      {g?.id} · #{g?.seed}
-                    </Badge>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <Badge>
+                        {g?.id} · #{g?.seed}
+                      </Badge>
+                      <StatusBadge status={st} />
+                    </div>
                   </div>
+                  {st && (st.kind !== "alive" || st.won) && <div className="mt-1 text-xs text-muted">{st.summary}</div>}
                   <div className="mt-2 grid grid-cols-4 gap-3">
                     <ProbStat label={hasDF ? "Win sub-dist" : "Win district"} value={s.wonGroup / n} />
                     <ProbStat label={hasDF ? "Dist. final" : "Wildcard"} value={(hasDF ? s.reachedDistrictFinal : s.wildcard) / n} />
@@ -125,6 +149,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                   <Th className="text-right">WC avg</Th>
                   <Th className="text-right">Rating</Th>
                   <Th>{hasDF ? "Sub-dist" : "District"}</Th>
+                  {anyResults && <Th>Status</Th>}
                   <Th>Win {hasDF ? "sub-dist" : "district"}</Th>
                   <Th>{hasDF ? "Dist. final" : "Wildcard"}</Th>
                   <Th>State</Th>
@@ -135,10 +160,13 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                 {proj.overall.map((t) => {
                   const s = sim.teams[t.name];
                   const g = groupOf.get(t.name);
+                  const st = statusOf(t.name);
                   return (
                     <tr key={t.name} className="hover:bg-muted-bg/60">
                       <Td className="tabular text-muted">{t.seed}</Td>
-                      <Td className="font-medium whitespace-nowrap">{t.name}</Td>
+                      <Td className={cn("font-medium whitespace-nowrap", st?.kind === "eliminated" && "line-through text-muted")}>
+                        {t.name}
+                      </Td>
                       <Td className="tabular">
                         {t.wins}-{t.losses}
                       </Td>
@@ -149,6 +177,11 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
                           {g?.id} · #{g?.seed}
                         </Badge>
                       </Td>
+                      {anyResults && (
+                        <Td>
+                          <StatusBadge status={st} />
+                        </Td>
+                      )}
                       <Td>
                         <Prob value={s.wonGroup / n} />
                       </Td>
@@ -170,6 +203,19 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
         </Card>
       </section>
 
+      {anyResults && (
+        <section id="status" className="max-md:scroll-mt-28">
+          <h2 className="text-lg font-semibold mb-1">Where everyone stands</h2>
+          <p className="text-sm text-muted mb-3">
+            From NSAA&apos;s posted results.{" "}
+            {hasDF
+              ? "A sub-district loss isn't the end: the best remaining averages fill the district finals, so a team is out only once that field is settled. A district-final or state loss ends the season."
+              : "A district loss isn't the end for the best remaining average, which goes to state as the wildcard once every district final is in. A state loss ends the season."}
+          </p>
+          <StatusOverview statuses={statuses} />
+        </section>
+      )}
+
       <section id="brackets" className="max-md:scroll-mt-28">
         <h2 className="text-lg font-semibold mb-1">
           {proj.official ? (hasDF ? "Sub-districts" : "Districts") : `Projected ${groupWord}s`}
@@ -177,6 +223,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
         <p className="text-sm text-muted mb-3">
           {FORMAT[vbClass](proj.overall.length)}
           {proj.official && " Groups, seeds, sites and times are NSAA's; posted results are final and fixed in the simulation."}
+          {anyResults && " Teams whose season is over are struck through."}
         </p>
         {check && (
           <details className="mb-3 text-sm rounded-md border border-border bg-card px-3 py-2">
@@ -197,7 +244,7 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
         )}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {proj.brackets.map((b) => (
-            <BracketCard key={b.id} bracket={b} winProb={(name) => (sim.teams[name]?.wonGroup ?? 0) / n} />
+            <BracketCard key={b.id} bracket={b} winProb={(name) => (sim.teams[name]?.wonGroup ?? 0) / n} statusOf={statusOf} />
           ))}
         </div>
       </section>
@@ -210,7 +257,25 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
             reaching state.
           </p>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <BracketCard bracket={proj.districtFinals} winProb={(name) => (sim.teams[name]?.reachedState ?? 0) / n} />
+            <BracketCard
+              bracket={proj.districtFinals}
+              winProb={(name) => (sim.teams[name]?.reachedState ?? 0) / n}
+              statusOf={statusOf}
+            />
+          </div>
+        </section>
+      )}
+
+      {proj.state && (
+        <section id="state" className="max-md:scroll-mt-28">
+          <h2 className="text-lg font-semibold mb-1">State tournament</h2>
+          <p className="text-sm text-muted mb-3">
+            The field from posted results{proj.wildcard ? ` (${proj.wildcard} is the wildcard)` : ""}, seeded by wildcard
+            average — our seeding until NSAA posts the bracket. {DATES_2026.state.quarter[vbClass]} – {DATES_2026.state.final}{" "}
+            in Lincoln. Percentages are each team&apos;s title odds.
+          </p>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <BracketCard bracket={proj.state} winProb={(name) => (sim.teams[name]?.champion ?? 0) / n} statusOf={statusOf} />
           </div>
         </section>
       )}
@@ -218,15 +283,32 @@ export default async function ClassPage({ params }: { params: Promise<{ cls: str
   );
 }
 
-function BracketCard({ bracket, winProb }: { bracket: Bracket; winProb: (t: string) => number }) {
+function BracketCard({
+  bracket,
+  winProb,
+  statusOf,
+}: {
+  bracket: Bracket;
+  winProb: (t: string) => number;
+  statusOf: (t: string) => TeamStatus | undefined;
+}) {
+  const matchById = (id: string) => bracket.matches.find((x) => x.id === id);
+  /** The team in a slot, once known: a name, or the posted winner of the match the slot refers to. */
+  const teamOf = (ref: string | null): string | null => {
+    if (!ref) return null;
+    if (!ref.startsWith("W:")) return ref;
+    return matchById(ref.slice(2))?.result?.winner ?? null;
+  };
   const label = (ref: string | null): string => {
+    const t = teamOf(ref);
+    if (t) return `#${bracket.teams.find((x) => x.name === t)?.seed} ${t}`;
     if (!ref) return "—";
-    if (ref.startsWith("W:")) {
-      const m = bracket.matches.find((x) => x.id === ref.slice(2));
-      return m?.result ? label(m.result.winner) : `Winner ${m?.label ?? ""}`;
-    }
-    const seed = bracket.teams.find((t) => t.name === ref)?.seed;
-    return `#${seed} ${ref}`;
+    return `Winner ${matchById(ref.slice(2))?.label ?? ""}`;
+  };
+  const Slot = ({ m, slot }: { m: BracketMatch; slot: string | null }) => {
+    const t = teamOf(slot);
+    const lost = !!t && m.result?.loser === t;
+    return <span className={cn(lost && "line-through text-muted")}>{label(slot)}</span>;
   };
   return (
     <Card>
@@ -236,18 +318,24 @@ function BracketCard({ bracket, winProb }: { bracket: Bracket; winProb: (t: stri
       </CardHeader>
       <CardContent className="space-y-3">
         <ul className="text-sm space-y-0.5">
-          {bracket.teams.map((t) => (
-            <li key={t.name} className="flex items-center justify-between gap-2">
-              <span>
-                <span className="text-muted tabular mr-1">{t.seed}.</span>
-                {t.name}{" "}
-                <span className="text-muted text-xs tabular">
-                  {t.wins}-{t.losses} · {t.avg.toFixed(2)}
+          {bracket.teams.map((t) => {
+            const st = statusOf(t.name);
+            return (
+              <li key={t.name} className="flex items-center justify-between gap-2">
+                <span className={cn("min-w-0", st?.kind === "eliminated" && "line-through text-muted")}>
+                  <span className="text-muted tabular mr-1">{t.seed}.</span>
+                  {t.name}{" "}
+                  <span className="text-muted text-xs tabular">
+                    {t.wins}-{t.losses} · {t.avg.toFixed(2)}
+                  </span>
                 </span>
-              </span>
-              <span className="text-xs tabular text-muted">{Math.round(100 * winProb(t.name))}%</span>
-            </li>
-          ))}
+                <span className="flex shrink-0 items-center gap-1.5 text-xs tabular text-muted">
+                  <StatusBadge status={st} />
+                  {Math.round(100 * winProb(t.name))}%
+                </span>
+              </li>
+            );
+          })}
         </ul>
         <div className="border-t border-border pt-2 space-y-1.5">
           {bracket.matches.map((m) => (
@@ -260,7 +348,7 @@ function BracketCard({ bracket, winProb }: { bracket: Bracket; winProb: (t: stri
                 </span>
               </div>
               <div>
-                {label(m.top)} <span className="text-muted">vs</span> {label(m.bottom)}
+                <Slot m={m} slot={m.top} /> <span className="text-muted">vs</span> <Slot m={m} slot={m.bottom} />
               </div>
               {m.result ? (
                 <div className="font-medium text-good">

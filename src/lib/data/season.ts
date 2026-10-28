@@ -8,9 +8,10 @@ import { join } from "node:path";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { CLASS_ORDER, type VbClass } from "../engine/types";
-import { bracketPages, buildSeasonData, NSAA_URLS } from "./load";
+import { bracketPages, buildSeasonData, NSAA_URLS, STATE_PAGE } from "./load";
 import { project, runSimulation, type SeasonData, type SimResult, type TeamSimStats } from "../engine/simulate";
 import { compareProjection, type ProjectionCheck } from "../engine/official";
+import { teamStatuses, type TeamStatus } from "../engine/status";
 
 export const SEASON = Number(process.env.NSAA_SEASON ?? 2026);
 export const SEEDING_CUTOFF = process.env.NSAA_SEEDING_CUTOFF ?? `${SEASON}-10-20`;
@@ -108,7 +109,7 @@ export async function loadSeason(): Promise<LoadedSeason> {
   }
   if (!Object.values(exports).some(Boolean)) throw new Error("No season data: run `npm run scrape` or set DATABASE_URL");
   const bracketHtml: Record<string, string> = {};
-  for (const [id] of bracketPages()) {
+  for (const [id] of [...bracketPages(), [STATE_PAGE.id]]) {
     const html = readFixture(`brackets/${id}.html`);
     if (html) bracketHtml[id] = html;
   }
@@ -134,12 +135,27 @@ export async function getProjection(vbClass: VbClass) {
   return { ...project(s.data, vbClass, SEEDING_CUTOFF), snapshotKey: s.snapshotKey, fetchedAt: s.fetchedAt };
 }
 
-/** Once NSAA's official groups are in: how our Oct 20 rule-based projection compared (null before). */
+/**
+ * Once NSAA's official groups are in: how our Oct 20 rule-based projection compared (null before, and null once
+ * postseason results are in — NSAA's export then carries later records, so the seeding-day projection can't be
+ * rebuilt; in 2026 it matched all 284 teams' groups and seeds, see tests/engine.test.ts).
+ */
 export async function getProjectionCheck(vbClass: VbClass): Promise<ProjectionCheck | null> {
   const s = await loadSeason();
+  if (s.data.posted.size > 0) return null;
   const official = project(s.data, vbClass, SEEDING_CUTOFF);
   if (!official.official) return null;
   return compareProjection(project(s.data, vbClass, SEEDING_CUTOFF, { computedOnly: true }).groups, official.groups);
+}
+
+/** Every team's standing (alive, at-large hopes, eliminated, qualified, champion) from posted results + the baseline. */
+export async function getStatuses(vbClass: VbClass): Promise<Map<string, TeamStatus>> {
+  const [proj, sim] = await Promise.all([getProjection(vbClass), getSimulation(vbClass)]);
+  const n = sim.nSims;
+  return teamStatuses(vbClass, proj, (t) => {
+    const x = sim.teams[t];
+    return { reachedState: x.reachedState / n, reachedDistrictFinal: x.reachedDistrictFinal / n, wildcard: x.wildcard / n };
+  });
 }
 
 /** What-if runs kept per snapshot, besides each class's baseline (oldest dropped first). */
@@ -255,6 +271,10 @@ export async function refreshSnapshots(classes: VbClass[] = CLASS_ORDER) {
       ),
     );
   }
+  await put("ALL", "bracket", NSAA_URLS.bracket(STATE_PAGE.distId), STATE_PAGE.id).then(
+    (body) => void (bodies.bracket_STATE = body),
+    (e) => void failed.push(`${STATE_PAGE.id}: ${e instanceof Error ? e.message : e}`),
+  );
   if (failed.length) console.warn(`[refresh] ${failed.length} bracket page(s) failed: ${failed.join("; ")}`);
   cache = null; // force rebuild
   return { stored, failed, bodies };

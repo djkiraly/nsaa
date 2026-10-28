@@ -25,6 +25,14 @@ const raw = {
   subdistrictHtml: read("subdistricts.html"),
 };
 const data = buildSeasonData(raw);
+/**
+ * The exports as they stood on Oct 23, when NSAA had posted pairings but no results. Seeding is checked against these:
+ * NSAA's export now carries every match since (postseason included) with today's records, so seeding-day numbers
+ * can't be rebuilt from the current files.
+ */
+const SEEDING = join(__dirname, "fixtures", "nsaa", "seeding-2026-10-23");
+const seedingRaw = { ...raw, exports: Object.fromEntries(CLASSES.map((c) => [c, readFileSync(join(SEEDING, `vb_${c}.csv`), "utf8")])) };
+const seeding = buildSeasonData(seedingRaw);
 const classTeams = (c: VbClass) => [...data.teams].filter(([, k]) => k === c).map(([n]) => n);
 
 describe("wildcard formula", () => {
@@ -61,8 +69,8 @@ describe("reproduces NSAA published averages", () => {
       expect(mismatches, mismatches.join("\n")).toEqual([]);
     });
   }
-  it("Gering = 27-5, 44.6250 at the Oct 20 cutoff (NSAA's B-5 bracket page: 44.6250 pts)", () => {
-    const g = computeRecord("Gering", "B", data.matches);
+  it("Gering = 27-5, 44.6250 at the Oct 20 cutoff (seeding snapshot; NSAA's B-5 bracket page: 44.6250 pts)", () => {
+    const g = computeRecord("Gering", "B", seeding.matches);
     expect(g.wins).toBe(27);
     expect(g.losses).toBe(5);
     expect(g.avg).toBeCloseTo(44.625, 4);
@@ -85,17 +93,17 @@ describe("seeding", () => {
   });
   it("the rule-based projection reproduces NSAA's official 2026 groups and seeds in every class", () => {
     const bracketHtml = Object.fromEntries(bracketPages().map(([id]) => [id, read(`brackets/${id}.html`)]));
-    const withOfficial = buildSeasonData({ ...raw, bracketHtml });
+    const withOfficial = buildSeasonData({ ...seedingRaw, bracketHtml });
     for (const c of CLASSES) {
       const official = project(withOfficial, c, "2026-10-20");
       expect(official.official).toBe(true);
-      const check = compareProjection(project(data, c, "2026-10-20").groups, official.groups);
+      const check = compareProjection(project(seeding, c, "2026-10-20").groups, official.groups);
       expect(check.misses, `${c}: ${JSON.stringify(check.misses)}`).toEqual([]);
       expect(check.total).toBe(classTeams(c).length);
     }
   });
   it("Class A: 34 teams serpentine into six 5-team districts and a 4-team A-7; higher seed always hosts", () => {
-    const proj = project(data, "A", "2026-10-31");
+    const proj = project(seeding, "A", "2026-10-31");
     expect(proj.overall).toHaveLength(34);
     expect(proj.groups.map((g) => g.teams.length)).toEqual([5, 5, 5, 5, 5, 5, 4]);
     expect(proj.groups[6].teams.map((t) => proj.overall.findIndex((o) => o.name === t.name) + 1)).toEqual([7, 8, 21, 22]);
@@ -107,7 +115,7 @@ describe("seeding", () => {
     const listed = parseSubdistrictAssignments(read("subdistricts.html"));
     for (const c of ["D1", "D2"] as const) {
       expect(Object.keys(listed).filter((k) => k.startsWith(`${c}-`))).toHaveLength(12);
-      const proj = project(data, c, "2026-10-31");
+      const proj = project(seeding, c, "2026-10-31");
       expect(proj.groups.map((g) => g.id)).toEqual(Array.from({ length: 12 }, (_, i) => `${c}-${i + 1}`));
       const assigned = proj.groups.flatMap((g) => g.teams.map((t) => t.name));
       expect(assigned.sort()).toEqual(classTeams(c).sort());
@@ -119,7 +127,7 @@ describe("seeding", () => {
     }
   });
   it("Class B districts: Norris #1 in B-1, Gering #1 in B-5", () => {
-    const proj = project(data, "B", "2026-10-31");
+    const proj = project(seeding, "B", "2026-10-31");
     expect(proj.overall[0].name).toBe("Norris");
     const gering = proj.groups.find((g) => g.teams.some((t) => t.name === "Gering"))!;
     expect(gering.id).toBe("B-5");

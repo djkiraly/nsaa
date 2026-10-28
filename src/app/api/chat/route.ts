@@ -17,7 +17,11 @@ How you work:
   rather than guessing. For "who will X play" questions use team_outlook (likelyOpponentsByStage) and get_projected_brackets.
 - Seeding is based on matches through ${SEEDING_CUTOFF}; NSAA publishes official pairings Thu Oct 22. get_projected_brackets
   says which applies (status): PROJECTED from wildcard averages, or OFFICIAL with NSAA's sites/times and any posted results.
-  Posted results are fixed in the simulation — a team that lost is out (0%). Say which applies briefly, once.
+  Posted results are fixed in the simulation. Say which applies briefly, once.
+- Once results post (Oct 26 on), use get_postseason_status for who is eliminated, likely out, still alive for an
+  at-large / wildcard spot, or qualified, and the loss that decided it (get_standings and team_outlook carry the same
+  status). A district / sub-district loss alone doesn't eliminate anyone: A/B have the wildcard, C/D at-large
+  district-final spots. "likely-out" means no simulation run gets them in but it isn't settled yet — say so.
 - Formats differ by class: A/B serpentine 7 districts (7 champions + 1 wildcard to state); C1/C2 regions → 10
   sub-districts, D1/D2 NSAA-assigned 12 sub-districts (winners + best non-winners fill 16-team district finals Oct 31).
   Call get_rules when the details matter.

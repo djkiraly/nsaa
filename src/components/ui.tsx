@@ -27,11 +27,12 @@ export function Badge({
   className,
   variant = "default",
   ...p
-}: React.HTMLAttributes<HTMLSpanElement> & { variant?: "default" | "accent" | "good" | "outline" }) {
+}: React.HTMLAttributes<HTMLSpanElement> & { variant?: "default" | "accent" | "good" | "warn" | "outline" }) {
   const v = {
     default: "bg-muted-bg text-foreground",
     accent: "bg-accent-soft text-accent",
     good: "bg-good-soft text-good",
+    warn: "bg-warn-soft text-warn",
     outline: "border border-border text-muted",
   }[variant];
   return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium", v, className)} {...p} />;

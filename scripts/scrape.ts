@@ -1,7 +1,7 @@
 /** CLI: download NSAA pages into data/raw (and into the DB when DATABASE_URL is set). */
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { bracketPages, NSAA_URLS } from "../src/lib/data/load";
+import { bracketPages, NSAA_URLS, STATE_PAGE } from "../src/lib/data/load";
 import { CLASS_ORDER } from "../src/lib/engine/types";
 
 const SEASON = Number(process.env.NSAA_SEASON ?? 2026);
@@ -27,7 +27,8 @@ async function get(url: string) {
   writeFileSync(join(RAW, `subdistricts.html`), await get(NSAA_URLS.subdistricts));
   writeFileSync(join(RAW, `district_finals.html`), await get(NSAA_URLS.districtFinals));
   mkdirSync(join(RAW, "brackets"), { recursive: true });
-  for (const [id, distId] of bracketPages()) writeFileSync(join(RAW, "brackets", `${id}.html`), await get(NSAA_URLS.bracket(distId)));
+  for (const [id, distId] of [...bracketPages(), [STATE_PAGE.id, STATE_PAGE.distId] as const])
+    writeFileSync(join(RAW, "brackets", `${id}.html`), await get(NSAA_URLS.bracket(distId)));
   console.log("fetched bracket pages");
   if (process.env.DATABASE_URL) {
     const { refreshSnapshots } = await import("../src/lib/data/season");

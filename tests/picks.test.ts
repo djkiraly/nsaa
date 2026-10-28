@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bracketPages, buildSeasonData } from "../src/lib/data/load";
-import { project, runSimulation } from "../src/lib/engine/simulate";
+import { project, runSimulation, type SeasonData } from "../src/lib/engine/simulate";
+import { PostedResults } from "../src/lib/engine/postseason";
 import { matchTeams, matchWinner, prunePicks } from "../src/lib/engine/picks";
 import type { Bracket, VbClass } from "../src/lib/engine/types";
 
 const RAW = join(__dirname, "..", "data", "raw");
 const read = (f: string) => readFileSync(join(RAW, f), "utf8");
 const CLASSES: VbClass[] = ["A", "B", "C1", "C2", "D1", "D2"];
-const data = buildSeasonData({
+const loaded = buildSeasonData({
   seasonYear: 2026,
   exports: Object.fromEntries(CLASSES.map((c) => [c, read(`vb_${c}.csv`)])),
   regionHtml: { C1: read("regions_C1.html"), C2: read("regions_C2.html") },
@@ -17,6 +18,17 @@ const data = buildSeasonData({
   bracketHtml: Object.fromEntries(bracketPages().map(([id]) => [id, read(`brackets/${id}.html`)])),
 });
 const CUTOFF = "2026-10-20";
+/** The official pairings with every posted result removed, so picks have open matches to work on. */
+const data: SeasonData = {
+  ...loaded,
+  posted: new PostedResults([]),
+  official: Object.fromEntries(
+    Object.entries(loaded.official).map(([c, o]) => [
+      c,
+      { ...o!, groups: Object.fromEntries(Object.entries(o!.groups).map(([id, g]) => [id, { ...g, games: g.games.map((x) => ({ ...x, winner: undefined, score: undefined })) }])) },
+    ]),
+  ),
+};
 // Official B-1: M1 #4 Alliance v #5 Ralston → M2 #1 Norris v W(M1); M3 #2 Scottsbluff v #3 South Sioux City; M4 final.
 const b1 = project(data, "B", CUTOFF).brackets[0];
 

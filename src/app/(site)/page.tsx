@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui";
-import { getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
+import { getSimulation, getStatuses, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES } from "@/lib/data/season";
+import type { StatusKind } from "@/lib/engine/status";
 import { DATES_2026, groupDates, hasDistrictFinals } from "@/lib/engine/brackets";
 
 // Static, regenerated when /api/refresh stores new NSAA data (revalidatePath) — hourly at most anyway. Static pages
@@ -10,6 +11,7 @@ export const revalidate = 3600;
 export default async function Home() {
   const season = await loadSeason();
   const sims = await Promise.all(SUPPORTED_CLASSES.map((c) => getSimulation(c)));
+  const statuses = await Promise.all(SUPPORTED_CLASSES.map((c) => getStatuses(c)));
   const teamCount = (c: string) => [...season.data.teams.values()].filter((x) => x === c).length;
 
   return (
@@ -26,8 +28,10 @@ export default async function Home() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {sims.map((sim) => {
+        {sims.map((sim, i) => {
           const n = sim.nSims;
+          const count = (...kinds: StatusKind[]) => [...statuses[i].values()].filter((s) => kinds.includes(s.kind)).length;
+          const [alive, atState, likelyOut, out] = [count("alive", "at-large"), count("qualified", "champion"), count("likely-out"), count("eliminated")];
           const top = Object.values(sim.teams)
             .sort((a, b) => b.champion - a.champion)
             .slice(0, 5);
@@ -53,6 +57,14 @@ export default async function Home() {
                     : `Districts ${d.r1}, ${d.r2}, ${d.final}`}{" "}
                   · State {DATES_2026.state.quarter[sim.vbClass]} – {DATES_2026.state.final}, Lincoln
                 </div>
+                {atState + likelyOut + out > 0 && (
+                  <div className="text-xs">
+                    <span className="font-medium">{alive} alive</span>
+                    {atState > 0 && <> · {atState} at state</>}
+                    {likelyOut > 0 && <> · {likelyOut} likely out</>}
+                    {out > 0 && <> · {out} out</>}
+                  </div>
+                )}
                 <div className="text-xs font-medium text-muted uppercase tracking-wide">Title odds ({n.toLocaleString()} sims)</div>
                 <ul className="space-y-1">
                   {top.map((t) => (

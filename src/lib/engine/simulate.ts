@@ -41,6 +41,8 @@ import {
   CLASS_B_NEUTRAL_MILES,
 } from "./brackets";
 import { distanceMiles, type Geo } from "./geo";
+import { fillResults, type PostedResults } from "./postseason";
+import { matchWinner } from "./picks";
 import {
   canonicalize,
   gaussian,
@@ -62,6 +64,8 @@ export interface SeasonData {
   subdistricts: Partial<Record<VbClass, SubdistrictAssignment[]>>;
   /** Official pairings and results from NSAA's bracket and district-finals pages, once posted. */
   official: Partial<Record<VbClass, OfficialClass>>;
+  /** Postseason results from the schedule export and the state page, by teams and date. */
+  posted: PostedResults;
   geo: Geo;
   ratings: Ratings;
 }
@@ -130,6 +134,10 @@ export interface Projection {
   official: boolean;
   /** C1/C2/D1/D2 district finals as NSAA posted them, with results (absent until all 8 pairings are up). */
   districtFinals?: Bracket;
+  /** A/B: the wildcard, once every district final is posted. */
+  wildcard?: string;
+  /** The state bracket, once posted results settle all eight qualifiers; with any state results. */
+  state?: Bracket;
 }
 
 export interface ProjectOptions {
@@ -181,12 +189,18 @@ const inc = (o: Record<string | number, number>, k: string | number) => {
   o[k] = (o[k] ?? 0) + 1;
 };
 
-/** Base W/L for every team name that appears anywhere. */
-export function baseRecords(data: SeasonData): Map<string, { wins: number; losses: number }> {
+/**
+ * Base W/L for every team name that appears anywhere, optionally only through a date. Seeding uses the records at the
+ * cutoff: NSAA's export lists every match since (postseason included) and carries today's records, so NSAA's exact
+ * seeding-day numbers can't be rebuilt afterwards — through the cutoff comes closest (official groups and seeds are
+ * read from NSAA's bracket pages anyway).
+ */
+export function baseRecords(data: SeasonData, throughDate?: string): Map<string, { wins: number; losses: number }> {
   const rec = new Map<string, { wins: number; losses: number }>();
   // Teams with schedules: compute from their rows.
   for (const m of data.matches) {
     if (!m.played || m.won === undefined) continue;
+    if (throughDate && m.date > throughDate) continue;
     const r = rec.get(m.team) ?? { wins: 0, losses: 0 };
     if (m.won) r.wins++;
     else r.losses++;
@@ -212,14 +226,46 @@ function classOf(data: SeasonData, name: string, fallbackRows: Match[]): VbClass
  */
 export function project(data: SeasonData, vbClass: VbClass, cutoff: string, opts: ProjectOptions = {}): Projection {
   const names = [...data.teams].filter(([, c]) => c === vbClass).map(([n]) => n);
-  const live = baseRecords(data);
+  const live = baseRecords(data, cutoff);
   const records = names.map((n) => computeRecord(n, vbClass, data.matches, { throughDate: cutoff, liveRecords: live }));
-  const proj = formGroupsAndBrackets(data, vbClass, records, () => 0.5, opts);
-  if (opts.computedOnly) return proj;
+  const formed = formGroupsAndBrackets(data, vbClass, records, () => 0.5, opts);
+  if (opts.computedOnly) return formed;
+  // Results the bracket pages don't show yet but the schedule export does.
+  const proj: Projection = { ...formed, brackets: formed.brackets.map((b) => fillResults(b, data.posted)) };
   const recordOf = (n: string) =>
     records.find((r) => r.name === n) ?? computeRecord(n, vbClass, data.matches, { throughDate: cutoff, liveRecords: live });
   const df = officialDistrictFinalsBracket(vbClass, data.official[vbClass]?.districtFinals, recordOf);
-  return df ? { ...proj, districtFinals: df } : proj;
+  if (df) proj.districtFinals = fillResults(df, data.posted);
+  return { ...proj, ...stateFromResults(data, vbClass, names, proj) };
+}
+
+/**
+ * The state field once posted results decide it — A/B: the seven district champions plus the best remaining average
+ * (wildcard); C1/C2/D1/D2: the eight district-final winners — seeded by average and paired 1v8, 4v5, 2v7, 3v6, with
+ * any state results filled in. Empty while any qualifier is still open.
+ */
+function stateFromResults(
+  data: SeasonData,
+  vbClass: VbClass,
+  names: string[],
+  proj: Projection,
+): Pick<Projection, "wildcard" | "state"> {
+  const live = baseRecords(data);
+  const rec = (n: string) => computeRecord(n, vbClass, data.matches, { liveRecords: live });
+  let field: string[];
+  let wildcard: string | undefined;
+  if (hasDistrictFinals(vbClass)) {
+    const winners = proj.districtFinals?.matches.map((m) => m.result?.winner);
+    if (!winners || winners.some((w) => !w)) return {};
+    field = winners as string[];
+  } else {
+    const winners = proj.brackets.map((b) => matchWinner(b, b.matches.at(-1)!, {}));
+    if (winners.some((w) => !w)) return {};
+    wildcard = rankByWildcard(names.filter((n) => !winners.includes(n)).map(rec), data.matches, () => 0.5)[0]?.name;
+    field = [...(winners as string[]), ...(wildcard ? [wildcard] : [])];
+  }
+  const seeded = rankByWildcard(field.map(rec), data.matches, () => 0.5).map((r, i) => ({ ...r, seed: i + 1 }));
+  return { wildcard, state: fillResults(buildStateBracket(vbClass, seeded), data.posted) };
 }
 
 function formGroupsAndBrackets(
@@ -278,7 +324,7 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
   const matchWins: Record<string, Record<string, number>> = {};
   /** Posted result, else a what-if pick for one of these two teams, else nothing (simulate it). */
   const decide = (m: BracketMatch, a: string, b: string): MatchResult | undefined => {
-    const posted = fixedFor(m, a, b);
+    const posted = fixedFor(m, a, b) ?? data.posted.find(a, b, m.date);
     if (posted) return posted;
     const p = picks[m.id];
     return p === a || p === b ? { winner: p, loser: p === a ? b : a } : undefined;
@@ -287,6 +333,7 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
   const canon = canonicalize(data.matches);
   const remaining = canon.filter((m) => !m.played && m.date <= cfg.cutoff);
   const base = baseRecords(data);
+  const baseAtCutoff = baseRecords(data, cfg.cutoff);
   const withDistrictFinals = hasDistrictFinals(cfg.vbClass);
   const groupFinalDate = groupDates(cfg.vbClass).final;
   const officialDF = withDistrictFinals
@@ -319,19 +366,26 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
 
     // 2. remaining regular season
     const simRows: SimResultRow[] = [];
-    const live = new Map(base); // shallow copy; we replace entries on update
-    const bump = (team: string, won: boolean) => {
-      const r = live.get(team) ?? { wins: 0, losses: 0 };
-      live.set(team, { wins: r.wins + (won ? 1 : 0), losses: r.losses + (won ? 0 : 1) });
+    // Records as they stand (live) and as they stood at the seeding cutoff (liveAtCutoff). Shallow copies: entries
+    // are replaced on update.
+    const live = new Map(base);
+    const liveAtCutoff = new Map(baseAtCutoff);
+    const bump = (team: string, won: boolean, date: string) => {
+      for (const recs of date <= cfg.cutoff ? [live, liveAtCutoff] : [live]) {
+        const r = recs.get(team) ?? { wins: 0, losses: 0 };
+        recs.set(team, { wins: r.wins + (won ? 1 : 0), losses: r.losses + (won ? 0 : 1) });
+      }
     };
     const play: PlayFn = (a, b, homeA, bestOf, date, hostOf, fixed) => {
-      // A result NSAA has posted is the same in every run; it still counts toward later seeding averages.
+      // A result NSAA has posted is the same in every run; it still counts toward later seeding averages — unless the
+      // schedule export already lists it, in which case it's in the records already.
       const [w, l] = [fixed?.setsW ?? 3, fixed?.setsL ?? 0];
       const [sa, sb] = fixed ? (fixed.winner === a ? [w, l] : [l, w]) : simulateMatch(setP(a, b, homeA), bestOf, rng);
       const aWon = sa > sb;
+      if (fixed && data.posted.find(a, b, date)?.inExport) return aWon ? a : b;
       simRows.push({ date, winner: aWon ? a : b, loser: aWon ? b : a, setsW: Math.max(sa, sb), setsL: Math.min(sa, sb), hostOf });
-      bump(a, aWon);
-      bump(b, !aWon);
+      bump(a, aWon, date);
+      bump(b, !aWon, date);
       return aWon ? a : b;
     };
     for (const m of remaining) play(m.a, m.b, m.homeA, m.bestOf, m.date, m.homeA === 1 ? m.a : m.homeA === -1 ? m.b : null);
@@ -361,7 +415,9 @@ export function runSimulation(data: SeasonData, cfg: SimConfig): SimResult {
       return [...(rowsByTeam.get(team) ?? []), ...extra];
     };
     const recordsThrough = (date: string): TeamRecord[] =>
-      names.map((n) => computeRecord(n, cfg.vbClass, rowsFor(n), { throughDate: date, liveRecords: live }));
+      names.map((n) =>
+        computeRecord(n, cfg.vbClass, rowsFor(n), { throughDate: date, liveRecords: date <= cfg.cutoff ? liveAtCutoff : live }),
+      );
 
     // 3. seeding & groups
     const proj = formGroupsAndBrackets(data, cfg.vbClass, recordsThrough(cfg.cutoff), rng);

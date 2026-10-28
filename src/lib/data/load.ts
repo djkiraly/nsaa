@@ -9,6 +9,7 @@ import { parseNsaaExport } from "./parse-nsaa";
 import { matchTeamName, parseRegionAssignments, parseSubdistrictAssignments } from "./parse-html";
 import { parseBracketPage, parseDistrictFinals } from "./parse-brackets";
 import { DIST_IDS, type RegionAssignment, type SubdistrictAssignment } from "../engine/seeding";
+import { exportPostseasonGames, PostedResults, type PostedGame } from "../engine/postseason";
 
 export interface RawSeasonFiles {
   seasonYear: number;
@@ -18,7 +19,10 @@ export interface RawSeasonFiles {
   regionHtml: Partial<Record<VbClass, string>>;
   /** District / sub-district assignments page (supplies the D1/D2 sub-districts) */
   subdistrictHtml?: string;
-  /** Group id ("B-6") → NSAA bracket page: official pairings from seeding day, results as they're posted */
+  /**
+   * Group id ("B-6") → NSAA bracket page: official pairings from seeding day, results as they're posted. "STATE" is
+   * the state championships page (`STATE_PAGE`).
+   */
   bracketHtml?: Record<string, string>;
   /** NSAA district finals page (C1/C2/D1/D2) */
   districtFinalsHtml?: string;
@@ -105,7 +109,27 @@ export function buildSeasonData(raw: RawSeasonFiles): SeasonData {
     }
   }
   const ratings = fitRatings(canonicalize(matches));
-  return { matches, teams, regions, subdistricts, official: buildOfficial(raw, teams), geo: buildGeo(), ratings };
+  const posted = new PostedResults([...exportPostseasonGames(matches), ...stateGames(raw.bracketHtml?.[STATE_PAGE.id], teams)]);
+  return { matches, teams, regions, subdistricts, official: buildOfficial(raw, teams), posted, geo: buildGeo(), ratings };
+}
+
+/** The state championships bracket page (one page, all classes; "Information not available" until NSAA posts it). */
+export const STATE_PAGE = { id: "STATE", distId: 86 };
+
+/** Results on the state page, names matched to the schedule export. Pairings come from our own seeding. */
+function stateGames(html: string | undefined, teams: Map<string, VbClass>): PostedGame[] {
+  if (!html) return [];
+  const page = parseBracketPage(html);
+  const all = [...teams.keys()];
+  const out: PostedGame[] = [];
+  for (const g of page.games) {
+    const names = [g.top?.name, g.bottom?.name].map((n) => (n ? matchTeamName(n, all) : undefined));
+    const winner = g.winner ? matchTeamName(g.winner, all) : undefined;
+    const loser = names.find((n) => n && n !== winner);
+    if (!g.date || !winner || !loser) continue;
+    out.push({ date: g.date, winner, loser, setsW: g.score?.[0], setsL: g.score?.[1], inExport: false });
+  }
+  return out;
 }
 
 /** Every district / sub-district id with its NSAA bracket page id, e.g. ["B-6", 13]. */

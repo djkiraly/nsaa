@@ -3,7 +3,7 @@
  * Each tool returns plain JSON the model can reason over.
  */
 import type Anthropic from "@anthropic-ai/sdk";
-import { getProjection, getSimulation, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES, validPicks } from "../data/season";
+import { getProjection, getSimulation, getStatuses, loadSeason, SEEDING_CUTOFF, SUPPORTED_CLASSES, validPicks } from "../data/season";
 import { NSAA_URLS } from "../data/load";
 import { parseBracketPage, parseDistrictFinals } from "../data/parse-brackets";
 import { matchWinProb, setWinProb } from "../engine/ratings";
@@ -13,6 +13,7 @@ import { DIST_IDS } from "../engine/seeding";
 import { computeRecord } from "../engine/wildcard";
 import type { BracketMatch, VbClass } from "../engine/types";
 import type { Stage, TeamSimStats } from "../engine/simulate";
+import type { TeamStatus } from "../engine/status";
 import { RULES_SUMMARY } from "./rules";
 
 type Json = Record<string, unknown>;
@@ -70,6 +71,16 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
       type: "object",
       properties: { vbClass: classParam, team: { type: "string", description: "Team name as NSAA prints it, e.g. 'Gering'" } },
       required: ["vbClass", "team"],
+    },
+  },
+  {
+    name: "get_postseason_status",
+    description:
+      "Where every team in a class stands once NSAA posts results: state champion, qualified for state, alive (hasn't lost), at-large (lost, but can still make the C/D district finals or the A/B wildcard on average — with the simulated chance), likely-out (lost; no simulation run gets them in, but other brackets are still playing so it isn't settled) or eliminated — each with the loss that ended or threatens the season (opponent, score, bracket, date). Use for 'who is out / eliminated', 'is X still alive', 'who qualified for state', 'who is the wildcard'. Optionally one team.",
+    input_schema: {
+      type: "object",
+      properties: { vbClass: classParam, team: { type: "string", description: "optional team name as NSAA prints it" } },
+      required: ["vbClass"],
     },
   },
   {
@@ -160,7 +171,7 @@ export async function runTool(name: string, input: Json): Promise<Json> {
   switch (name) {
     case "get_standings": {
       const vbClass = input.vbClass as VbClass;
-      const proj = await getProjection(vbClass);
+      const [proj, statuses] = await Promise.all([getProjection(vbClass), getStatuses(vbClass)]);
       const groupOf = new Map<string, { group: string; seed: number }>();
       for (const g of proj.groups) for (const t of g.teams) groupOf.set(t.name, { group: g.id, seed: t.seed });
       return {
@@ -174,12 +185,14 @@ export async function runTool(name: string, input: Json): Promise<Json> {
           wildcardAvg: Number(t.avg.toFixed(4)),
           rating: Number((data.ratings.rating.get(t.name) ?? 0).toFixed(2)),
           ...groupOf.get(t.name),
+          status: statuses.get(t.name)?.kind,
+          statusNote: statuses.get(t.name)?.summary,
         })),
       };
     }
     case "get_projected_brackets": {
       const vbClass = input.vbClass as VbClass;
-      const proj = await getProjection(vbClass);
+      const [proj, statuses] = await Promise.all([getProjection(vbClass), getStatuses(vbClass)]);
       const want = (input.groupId as string | undefined)?.toUpperCase();
       const brackets = proj.brackets.filter((b) => !want || b.id === want);
       const match = (m: BracketMatch) => ({
@@ -200,10 +213,26 @@ export async function runTool(name: string, input: Json): Promise<Json> {
         note: BRACKET_NOTES[vbClass],
         brackets: brackets.map((b) => ({
           id: b.id,
-          teams: b.teams.map((t) => ({ seed: t.seed, team: t.name, record: `${t.wins}-${t.losses}`, avg: Number(t.avg.toFixed(4)) })),
+          teams: b.teams.map((t) => ({
+            seed: t.seed,
+            team: t.name,
+            record: `${t.wins}-${t.losses}`,
+            avg: Number(t.avg.toFixed(4)),
+            status: statuses.get(t.name)?.kind,
+          })),
           matches: b.matches.map(match),
         })),
         ...(proj.districtFinals && !want ? { districtFinals: proj.districtFinals.matches.map(match) } : {}),
+        ...(proj.wildcard && !want ? { wildcard: proj.wildcard } : {}),
+        ...(proj.state && !want
+          ? {
+              state: {
+                note: "Field from posted results, seeded by wildcard average (our seeding until NSAA posts the state bracket).",
+                teams: proj.state.teams.map((t) => ({ seed: t.seed, team: t.name, record: `${t.wins}-${t.losses}`, avg: Number(t.avg.toFixed(4)) })),
+                matches: proj.state.matches.map(match),
+              },
+            }
+          : {}),
       };
     }
     case "simulate_postseason": {
@@ -250,8 +279,9 @@ export async function runTool(name: string, input: Json): Promise<Json> {
       const sim = await getSimulation(vbClass);
       const t = sim.teams[team];
       const n = sim.nSims;
-      const proj = await getProjection(vbClass);
+      const [proj, statuses] = await Promise.all([getProjection(vbClass), getStatuses(vbClass)]);
       const group = proj.groups.find((g) => g.teams.some((x) => x.name === team))!;
+      const status = statuses.get(team);
       const rec = computeRecord(team, vbClass, data.matches, { throughDate: SEEDING_CUTOFF });
       const stageKeys: Stage[] = ["group-r1", "group-semi", "group-final", "district-final", "state-quarter", "state-semi", "state-final"];
       const opponents = Object.fromEntries(
@@ -274,6 +304,11 @@ export async function runTool(name: string, input: Json): Promise<Json> {
         projectedGroup: group.id,
         projectedGroupSeed: group.teams.find((x) => x.name === team)?.seed,
         groupMates: group.teams.map((x) => `${x.seed}. ${x.name} (${x.wins}-${x.losses}, ${x.avg.toFixed(2)})`),
+        status: status?.kind,
+        statusNote: status?.summary,
+        ...(status?.loss
+          ? { loss: { opponent: status.loss.opponent, score: status.loss.score, stage: status.loss.stage, bracket: status.loss.where, date: status.loss.date } }
+          : {}),
         probabilities: summarize(t, n, vbClass),
         overallSeedDistribution: top(t.overallSeed, 5).map(([s, c]) => ({ seed: Number(s), probability: pct(c, n) })),
         groupDistribution: top(t.group, 4).map(([g, c]) => ({ group: g, probability: pct(c, n) })),
@@ -281,6 +316,42 @@ export async function runTool(name: string, input: Json): Promise<Json> {
         likelyOpponentsByStage: opponents,
         likelySitesByStage: sites,
         remainingRegularSeason: remaining,
+      };
+    }
+    case "get_postseason_status": {
+      const vbClass = input.vbClass as VbClass;
+      const [proj, statuses] = await Promise.all([getProjection(vbClass), getStatuses(vbClass)]);
+      const order: TeamStatus["kind"][] = ["champion", "qualified", "alive", "at-large", "likely-out", "eliminated"];
+      const seedOf = new Map(proj.overall.map((t) => [t.name, t.seed]));
+      const wantTeam = input.team ? findTeam(statuses.keys(), String(input.team)) : undefined;
+      if (input.team && !wantTeam) return { error: `No ${vbClass} team matching '${input.team}'` };
+      const rows = [...statuses]
+        .filter(([t]) => !wantTeam || t === wantTeam)
+        .map(([team, s]) => ({
+          team,
+          seed: seedOf.get(team),
+          status: s.kind,
+          ...(s.won ? { won: s.won } : {}),
+          ...(s.pState !== undefined ? { pReachState: Math.round(s.pState * 1000) / 10 } : {}),
+          ...(s.loss ? { loss: { opponent: s.loss.opponent, score: s.loss.score, stage: s.loss.stage, bracket: s.loss.where, date: s.loss.date } } : {}),
+          summary: s.summary,
+        }))
+        .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || (a.seed ?? 999) - (b.seed ?? 999));
+      const withDF = hasDistrictFinals(vbClass);
+      return {
+        vbClass,
+        dataAsOf: season.fetchedAt.toISOString(),
+        meaning: {
+          champion: "won the state final",
+          qualified: "in the state field by results",
+          alive: "hasn't lost (C/D sub-district winners: in the district final)",
+          "at-large": `lost, but can still make ${withDF ? "the district finals as one of the best remaining averages" : "state as the wildcard (best remaining average)"}; pReachState is the simulated chance`,
+          "likely-out": "lost; no simulation run gets them in, but other brackets are still playing so it isn't settled",
+          eliminated: "season over",
+        },
+        ...(proj.wildcard ? { wildcard: proj.wildcard } : {}),
+        counts: Object.fromEntries(order.map((k) => [k, rows.filter((r) => r.status === k).length])),
+        teams: rows,
       };
     }
     case "head_to_head": {
